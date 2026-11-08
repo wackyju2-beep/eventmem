@@ -1,7 +1,7 @@
 # eventmem
 
 [![tests](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml)
-[![license: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **English** · [中文](README.zh-CN.md)
 
@@ -225,8 +225,8 @@ test_i18n.py     PASS 9
 
 ## License
 
-PolyForm Noncommercial 1.0.0. Personal use, hobby projects, study, research and non-profit work are
-fine; selling it or shipping it inside a commercial product is not. See `LICENSE`.
+MIT. See `LICENSE`. Use it, change it, ship it — including commercially; just keep the copyright
+notice.
 
 Third-party weights are not distributed here. The embedding and decision models carry their own
 licenses; the decision model I measured is CC BY-NC 4.0.
