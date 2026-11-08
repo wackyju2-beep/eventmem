@@ -1,0 +1,22 @@
+name: release
+
+# 打 v* 标签就自动建 Release：本机没有 gh/token，推送由 GitHub Desktop 完成，
+# 所以用仓库自带的 GITHUB_TOKEN 在 runner 上跑 gh release create。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # --generate-notes 要完整历史
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes

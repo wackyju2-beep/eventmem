@@ -1,0 +1,21 @@
+name: eventmem
+version: 0.1.0
+description: >-
+  事件型本地记忆（架构 v2.1）：append-only 事件 + 人工命名的项目 + 夜间本地关系边。
+  SQLite/FTS5 + 可选 ONNX 向量，无网络、无守护进程。工具执行中间件在变更类工具结果里
+  追加一行提醒，让模型在同一回合写下事件。
+hooks:
+  - prefetch
+  - sync_turn
+  - on_session_switch
+python_dependencies:
+  # Vector arm only; recall degrades to FTS when these are absent. The platform mark
+  # mirrors localmem: no cp314 wheels for android, and an unmarked requirement breaks
+  # `uv lock` for that split.
+  - "onnxruntime>=1.20,<2; sys_platform != 'android'"
+  - "tokenizers>=0.20,<1; sys_platform != 'android'"
+  - "numpy>=1.26,<3; sys_platform != 'android'"
+tags:
+  - memory
+  - local
+  - sqlite

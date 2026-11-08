@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 本地数据与模型，别提交
+*.db
+*.db-wal
+*.db-shm
+*.onnx
+*.gguf
+models/
+
+.DS_Store
+Thumbs.db
