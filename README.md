@@ -228,8 +228,5 @@ test_i18n.py     PASS 9
 PolyForm Noncommercial 1.0.0. Personal use, hobby projects, study, research and non-profit work are
 fine; selling it or shipping it inside a commercial product is not. See `LICENSE`.
 
-Versions published before v0.1.0 were released under MIT and stay under MIT for anyone who already
-has them.
-
 Third-party weights are not distributed here. The embedding and decision models carry their own
 licenses; the decision model I measured is CC BY-NC 4.0.
