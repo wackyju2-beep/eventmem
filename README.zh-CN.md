@@ -1,7 +1,7 @@
 # eventmem
 
 [![tests](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml)
-[![license: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · **中文**
 
@@ -205,10 +205,8 @@ test_i18n.py     PASS 9
 
 ## 许可
 
-PolyForm Noncommercial 1.0.0。个人使用、业余项目、学习、研究、非营利都可以；
-拿去卖或者塞进商业产品里不行。全文见 `LICENSE`。
-
-v0.1.0 之前发布过的版本是 MIT，已经拿到那些版本的人仍然按 MIT 使用。
+MIT，见 `LICENSE`。随便用、随便改、可以商用，保留版权声明即可。
+v0.1.0 那个发布快照出的时候是 PolyForm Noncommercial 1.0.0，已经拿到那些副本的人仍然按那份许可走。
 
 第三方权重不随仓库分发。嵌入模型和决策模型的许可各自独立，
 我实测用的 decision 模型权重是 CC BY-NC 4.0。
