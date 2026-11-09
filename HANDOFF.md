@@ -1,11 +1,13 @@
 # HANDOFF — eventmem（core / adapter 拆分）
 
-给下一个接手的人（或下一个会话的我自己）。状态：**2026-11-09，拆分完成并已上线。**
+给下一个接手的人（或下一个会话的我自己）。状态：**2026-11-09，拆分完成并已上线；0.2.1 把图谱并回 adapter、重写了双语 README。**
 
 ## 一句话现状
 
 - 仓库：Mint `~/eventmem` ↔ Windows `D:\eventmem`（单向同步，见文末）。
 - 运行时：`~/.hermes/plugins/eventmem` → 软链到本仓库 `adapters/hermes/eventmem`。
+- 图谱：`~/.hermes/plugins/eventmem-graph` 与 `~/.hermes/desktop-plugins/eventmem-graph` 也指向本仓库
+  `adapters/hermes/` 下的对应目录（`install.sh` 一次建三条软链）。
 - 生产库：`~/.hermes/eventmem/events.db`（schema v7，171 条事件，未迁移、未改动）。
 - 连边：`eventmem-worker.service` 已换到 `adapters/hermes/run.py worker`，运行中。
 - 测试：8 个套件 **237 项**，installs venv 与裸 3.12 双解释器全绿。
@@ -49,8 +51,9 @@ PY
 
 - **桌面会话仍在用旧模块**：本会话进程启动早于改动，`prefetch` 还是旧的。
   换新代码要重启 `hermes-dashboard` / `hermes-gateway`（或开新会话）。
-- `eventmem-graph`（3D 图谱）仍在旧仓库 `hermes-eventmem`，没搬过来——它直连 events.db，
-  与本次拆分无关；要不要并进来另说。
+- `eventmem-graph`（3D 图谱）已并入：`adapters/hermes/eventmem-graph`（dashboard 后端）+
+  `adapters/hermes/desktop-plugins/eventmem-graph`（前端）。它直连 events.db、不走 `EventMem`，
+  所以不算 provider，也不注册任何东西。
 - DeepSeek Harness adapter：照 `docs/architecture.md` 的表格重写
   `provider/tools/middleware/settings/host` 五件套，core 一行不用动。
 - 旧的 `hermes-eventmem` 仓库：内容已过时（仍是拆分前的插件），待决定归档还是改名。

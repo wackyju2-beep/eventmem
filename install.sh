@@ -4,32 +4,37 @@
 #   ./install.sh                 # links into ~/.hermes
 #   HERMES_HOME=/path ./install.sh
 #
-# The plugin is a SYMLINK, not a copy: edit the repository, restart the host, done.
-# (Hermes loads memory providers from $HERMES_HOME/plugins/<name>/, and the directory
-# name is the provider name, which is why the link is named "eventmem".)
+# The three directories are SYMLINKS, not copies: edit the repository, restart the host, done.
+# Hermes loads memory providers and dashboard plugins from $HERMES_HOME/plugins/<name>/, and
+# desktop plugins from $HERMES_HOME/desktop-plugins/<name>/. The link names are the plugin
+# names, which is why they are "eventmem" and "eventmem-graph".
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
-PLUGIN_DIR="$HOME_DIR/plugins"
-TARGET="$REPO/adapters/hermes/eventmem"
-LINK="$PLUGIN_DIR/eventmem"
 
-if [ ! -f "$TARGET/plugin.yaml" ]; then
-  echo "install.sh: $TARGET/plugin.yaml not found — is this the repository root?" >&2
-  exit 1
-fi
+link() {
+  local target="$1" link="$2"
+  if [ ! -e "$target" ]; then
+    echo "install.sh: $target not found — is this the repository root?" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$link")"
+  if [ -e "$link" ] && [ ! -L "$link" ]; then
+    local backup="$link.bak-$(date +%Y%m%d-%H%M%S)"
+    mv "$link" "$backup"
+    echo "moved the old directory to $backup"
+  fi
+  ln -sfn "$target" "$link"
+  echo "linked $link -> $target"
+}
 
-mkdir -p "$PLUGIN_DIR"
-
-if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
-  backup="$LINK.bak-$(date +%Y%m%d-%H%M%S)"
-  mv "$LINK" "$backup"
-  echo "moved the old plugin directory to $backup"
-fi
-
-ln -sfn "$TARGET" "$LINK"
-echo "linked $LINK -> $TARGET"
+link "$REPO/adapters/hermes/eventmem" \
+     "$HOME_DIR/plugins/eventmem"
+link "$REPO/adapters/hermes/eventmem-graph" \
+     "$HOME_DIR/plugins/eventmem-graph"
+link "$REPO/adapters/hermes/desktop-plugins/eventmem-graph" \
+     "$HOME_DIR/desktop-plugins/eventmem-graph"
 
 cat <<EOF
 
@@ -37,6 +42,7 @@ Next steps
   1. config.yaml:   memory:
                       provider: 'eventmem'
                     plugins:
+                      enabled: [eventmem-graph]   # optional, the graph only
                       entries:
                         eventmem:
                           settings: {}     # optional; core defaults apply
@@ -46,4 +52,5 @@ Next steps
        systemctl --user edit eventmem-worker
        ExecStart=%h/.hermes/hermes-agent/.venv/bin/python $REPO/adapters/hermes/run.py worker --db %h/.hermes/eventmem/events.db
   4. restart the host processes that serve sessions (dashboard / gateway / desktop).
+     desktop plugins: Cmd/Ctrl-K -> Reload desktop plugins
 EOF

@@ -1,5 +1,5 @@
 name: eventmem
-version: 0.2.0
+version: 0.2.1
 description: >-
   事件型本地记忆（架构 v2.1）：append-only 事件 + 人工命名的项目 + 夜间本地关系边。
   SQLite/FTS5 + 可选 ONNX 向量，无网络、无守护进程。本包是 eventmem-core 的 Hermes
