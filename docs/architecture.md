@@ -1,135 +1,97 @@
-# 架构
+# 架构：core / adapter
 
-三句话：**事件只追加**，**关系夜间算**，**召回先检索再沿边展开**。
-下面的表名、字段名与 `schema.py` 一一对应（schema v7）。
+一句话：**core 负责记忆逻辑，adapter 负责让某个宿主以为这是它自己的记忆。**
 
-## 1. 数据模型
+```
+                 ┌─────────────────────────────┐
+   Hermes ──────▶│ adapters/hermes/eventmem    │
+                 │  provider · tools ·         │
+                 │  middleware · extract ·     │
+                 │  settings · cli             │
+                 └──────────────┬──────────────┘
+                                │  EventMem / CoreSettings
+                 ┌──────────────▼──────────────┐
+   DeepSeek ────▶│ core/eventmem_core          │
+   Harness        │  core.py   EventMem 门面    │
+   (下一站)        │  store / recall / embed     │
+                 │  nightly / worker / jev     │
+                 └─────────────────────────────┘
+```
 
-| 表 | 作用 | 关键点 |
+## 边界怎么划的
+
+| 属于 core | 属于 adapter |
+|---|---|
+| events.db 的 schema 与迁移 | 数据库放在哪个目录（`~/.hermes/eventmem`） |
+| 事件的写入、向量编码、FTS/向量融合召回 | 召回块注入到哪一轮（`prefetch`） |
+| 项目词表与归档规则 | 工具的 JSON schema 与错误文案 |
+| 关系边的判定（margin、候选、tier） | 配置从哪读（`config.yaml` / 环境变量 / 远端） |
+| 夜间补算与游标 | 什么时候跑（systemd / cron / 宿主线程） |
+| 渲染块的行格式与预算 | 渲染给谁看（模型 / 用户 / 另一个 agent） |
+
+判据很简单：**换一个宿主，这段代码还成立吗？** 成立就在 core。
+
+## core 的三个入口
+
+```python
+from eventmem_core import EventMem, CoreSettings, apply
+
+settings = apply(CoreSettings(db_path="/path/events.db"), {
+    "edges": {"margin": 0.2},
+    "recall": {"budget_tokens": 800},
+})
+mem = EventMem(settings)          # 打开库、懒加载编码器
+mem.add_event("结果", "……", project="小主机", session="s1")
+mem.recall("上次那个盘怎么选的？", state=mem.new_recall_state())
+mem.build_edges(since_ts)          # 一轮连边（需要决策模型）
+mem.close()
+```
+
+- `EventMem` 是**唯一**的 API 面。adapter 不许 import `eventmem_core.store` 去拼 SQL。
+- `CoreSettings` 是 frozen dataclass；要改就 `apply()` 出新对象，不要原地改。
+- `apply()` 的契约：未知键告警忽略、坏值告警回落、越界值拒绝。**配置写错不能让记忆挂掉。**
+
+## adapter 的形状（以 Hermes 为例）
+
+| 文件 | 干什么 | 换宿主时要重写吗 |
 |---|---|---|
-| `events` | 记忆本体 | `ts / kind / text / project_id / session / art_id / art_path / vec / edited_ts`，`AUTOINCREMENT` 不复用 id |
-| `projects` | 人工命名的项目 | `name UNIQUE`、`status active/archived`；模型只能选不能造 |
-| `session_project` | 会话粘性 | 一段会话里说一次项目名，之后默认归属它 |
-| `artifacts` | 大块原文 | 命令/配置/日志/代码按 `sha` 去重存全文，事件只留 `art_id` |
-| `event_projects` | 多对多 | 一个事件可以同时挂两个项目（`is_primary` 标主项目） |
-| `edges` | 修正类关系 | 主键 `(src,dst,rel)`；`src` 是后来的事件，`dst` 是被修正的旧事件；`probs` 存判定时的原始分布 |
-| `pair_evals` | 判定留档 | 每对**问过模型**的事件都写一行，不管最后连没连边——图谱里的灰虚线来自这里 |
-| `meta` | 游标/开关 | `nightly_since_ts` 等 |
-| `events_fts` / `artifacts_fts` | FTS5 trigram | 触发器同步；配置项、型号、报错码靠字面命中 |
-| `atom_pos` | 图谱里原子的位置 | `id → (x,y,z)`，人工拖过才有一行；没有就用晶格默认位置 |
+| `__init__.py` | `register(ctx)`：装 provider、中间件、aux 任务 | 是（别的宿主的插件协议不同） |
+| `provider.py` | `MemoryProvider` 生命周期、prefetch、sync_turn | 是 |
+| `tools.py` | 7 个工具的 schema + 分发 + 参数校验 | 大部分是（工具名/文案） |
+| `middleware.py` | 「这个工具改了状态」判定（Hermes 工具名 + shell 语法） | 是 |
+| `extract.py` | 回合末抽取的提示词与 JSON 解析 | 基本可复用 |
+| `settings.py` | `config.yaml` → `CoreSettings` | 是 |
+| `cli.py` / `run.py` | 脱离会话的 nightly / worker 入口 | 是 |
+| `host.py` | 所有 `agent.*` 依赖集中在这一个文件 | 是 |
 
-几条刻意的选择：
+写新 adapter 的时候，先把 `host.py` 对应的那几个能力找齐：
+**调一次辅助模型、脱敏、判断「这句话不值得记」、在宿主上下文里起线程。**
 
-- **`text` ≤ 120 字、第一人称**。事件是「我当时得出的结论」，不是会议纪要。
-- **事件不可改**。世界变了就再写一条「变更」，用边指回旧的那条——历史因此可追溯。
-- **`vec` 编码的是 `[项目名] 类型 text`**，不是裸 `text`。中文里大量无主语残句（「改成 2 了」），
-  只编码正文会让检索失明。
-- **`edges.probs`** 存分布而不是只存标签：以后调 margin、换阈值，不用重跑模型。
-- **`pair_evals` 与 `edges` 分开**：判过但判成「都不是」也要留证据，否则没法回答「这两条到底算过没有」。
+## 数据流
 
-## 2. 写入路径
+**写**：模型调 `evt_add` → adapter 校验（kind、项目词表、批次上限、links 方向）
+→ 脱敏 → `EventMem.add_event()`（编码向量、写 events/event_projects）
+→ 批次内 links 走 `EventMem.add_link()`。
 
-```
-工具结果（write_file / patch / 变更类命令）
-   └─ tool_execution 中间件追加一行：「[memory] …请调用 evt_add」
-模型在同一回合调 evt_add（1–3 条）
-   └─ store.add_event：写 artifacts → 编码向量 → 写 events → 挂项目
-回答发出后 sync_turn（后台线程）
-   └─ 本回合没写过事件？→ auxiliary LLM 再抽 0–3 条；抽取失败才退化成机械摘要
-```
+**读**：宿主每轮问 `prefetch(query)` → adapter 编一次 query 向量
+→ `EventMem.recall()`（向量 + FTS → RRF → 骨架段 + 命中段）
+→ 拼上 `project_hint` 一行 → 返回给宿主注入。
 
-为什么是「回合最后一个工具调用」：工具循环中途还没看到结果，写下去的都是半成品。
-为什么要有中间件：hook 回调不能发起工具调用，但中间件能改写工具结果——提醒只能从这里塞。
+**边**：worker 每 60 s 看游标之后有没有新事件 → 有就 `build_edges`
+→ 候选（活跃链头 / 同会话 / 跨项目 / 决策骨架）→ 两问 choice
+→ `margin` 判定 → `add_edge` → 推游标（高水位）。
 
-`sync_turn` 是兜底，不是主路径；模型已经写过就不重复。空数组不算「写过」，
-所以闲聊以外不会有整轮丢失。
+## 为什么这样拆
 
-## 3. 关系（夜间连边）
+- **一个宿主多个进程**：Hermes 的 dashboard / gateway / 每个桌面会话都是完整后端，
+  插件会被加载很多次。连边必须是独立进程，不是「插件里的线程」——所以 worker 在 core。
+- **宿主会换**：DeepSeek Harness 的插件协议、配置位置、模型调用都和 Hermes 不同，
+  但「margin 0.15 才写边」「骨架 5 条」「RRF k=60」这些不该跟着重写。
+- **参数要能说清**：之前所有阈值是模块常量，改一个要改代码。现在 default 仍在 core，
+  adapter 只决定从哪里读——于是 `--print-settings` 能一眼看到这次到底用了什么。
 
-候选**不是全组合**，是「活跃链头」——没有被 改变/否定/重复 过的事件：
+## 不再做的事
 
-| 来源 | 取法 |
-|---|---|
-| 语义 | 全局活跃链头里 cos ≥ 0.35 的 top-10 |
-| 桥 | 同会话最近的 10 个活跃链头 + 共享同一 artifact 的全部链头 |
-| 跨项目 | 只有 变更/决定 → 变更/决定 才触发，cos > 0.7，top-3 |
-| 同会话 | 最近 3 条 + 最近 2 条未闭环的教训 + 最新 5 条未被改变/否定的决定 |
-
-一对事件问两个问题，一次请求出两个分布：
-
-| 问 | 选项 |
-|---|---|
-| `axis` | 重复 / 改变 / 否定 / 都不是 |
-| `detail` | 因为 / 细化 / 都不是 |
-
-写边规则：两问各自在**原始四项分布**（含服务端的「都不是」）上取第一名，
-`p1 − p2 ≥ 0.15` 且 p1 不是「都不是」才写。`重复` 命中时抑制 detail 轴。
-每对先写 `pair_evals` 留档，再写 `edges`——所以「算过但没连上」是可查的。
-
-没有 7 天窗口，也没有每晚上限：worker 每 60 s 看一次 `max(events.id)` 与游标，
-有新的就算，算完把游标推到 `run_start − 120s`（两分钟重叠，边是 `INSERT OR REPLACE`，幂等）。
-
-## 4. 召回
-
-```
-query ─┬─ 向量：cos ≥ 0.35，top-k
-       └─ FTS5：trigram 字面命中
-            └─ RRF 融合 → 按优先级装填（每段各自 max_items / budget）
-```
-
-每轮最多两段，空行分隔：
-
-1. **骨架段**（每会话每项目一次，独立预算）：最早决定 → 最新决定 → 最新结果 → 最新变更 → 最新教训，
-   最多 5 条，缺角色跳过，**不按时间重排**。目的：让模型知道这个项目从哪来、现在什么样。
-2. **命中段**（每轮）：RRF 命中 + 一跳「改变/否定」邻居 + 同会话邻居，按 ts 倒序。
-
-命中旧事件时会顺着边反向追到新事件，渲染成 `[已失效·被11-06取代]`。
-本会话已经给过的整条只留指针行 `#63 #60 同上文`，不占正文预算。
-
-**第三行：项目候选。** `prefetch` 在块尾（召回为空时单独）给一行
-`[eventmem] 可用项目（按本回合相关度）：A / B / C；都不合适就先 proj_add 再 evt_add`。
-候选 = 每个项目全部事件向量的均值（质心，事件向量本来就编码了 `[项目名]`）与本回合 query 的 cos，
-top-5，现算不落库；空项目（还没有事件）退回 `[项目名]` 的名字向量（进程内缓存；名字对「这块 4060 显存」
-这种 query 仍然有效，而空项目最可能承接新工作）；编码器缺席时退化成按活跃度列名字。
-prefetch 只 encode 一次 query，向量以 `qvec=` 同时传给 `recall()` 与 `project_hint()`。目的：模型写事件时「只能选不能造」，
-但它原本无从得知有哪些项目，只能先写错一次再看错误里的全表。
-
-## 5. 图谱
-
-后端 `plugins/eventmem-graph`：一个 FastAPI `router`，读写同一张库，不 import `eventmem.*`
-（避免 provider 被加载两次）。路由：
-
-```
-GET    /health
-GET    /graph                  → events / edges / pairs / projects / sessions / positions
-PATCH  /events/{id}            → 改文本、类型（写 edited_ts，图谱上描彩虹边）
-PATCH  /edges                  → 改关系（decided_by='human'）
-DELETE /edges?src&dst&rel
-PUT    /positions              → 批量存原子坐标（人工拖动的结果）
-DELETE /positions              → 复原成默认晶格
-```
-
-前端 `desktop-plugins/eventmem-graph/plugin.js`：一个文件，宿主注入 React 与 `@hermes/plugin-sdk`。
-布局是**立方晶格**（最新事件占中心，旧事件往外铺），相机 FOV 26° 长焦，默认只看到十来个原子。
-渲染用 rAF，每帧只改 `transform` 与 SVG 属性；拖动/焦点飞行的位置写回 `atom_pos`，
-所以「拉过的地方」刷新后还在——和在一堆风铃里挑拣一样，挑开就留在那。
-
-## 6. 迁移
-
-`ensure_schema()` 幂等：`user_version` 落后就逐版本 `ALTER TABLE` 补列、建表、建索引。
-v3 → v4 删过 `pending_turns`（兜底方案被否），v5 加 `edges.probs`，v6 加 `pair_evals`，
-v7 加 `events.art_path`（sha 是内容地址、路径才是文件身份，Tier-2 靠它桥接同一文件的多次改动）
-与两处 `edited_ts`。降级不支持：旧版本读到新库会因为没有列而报错，请不要回退。
-
-## 7. 语言
-
-模型看到的文本全部经过 `i18n.tr(zh, en)`：工具描述、中间件提醒、回合末抽取提示词、召回块表头
-与失效标记、两问的题干和选项定义。取语言的顺序是 `EVENTMEM_LANG` → 宿主 `agent.i18n.get_language()` →
-`config.yaml` 的 `display.language` → 英文（Hermes 自己的默认）。只有 `zh*` 和 `en` 两套，其余回落英文。
-
-**存进库的值不翻译**：`kind` 仍然是 `决定/尝试/结果/变更/教训`，`rel` 仍然是
-`改变/否定/重复/因为/细化`。英文模式下下发给模型的选项标签是 `repeat/change/negate`、
-`because/refine`，回来的答案在 `_canonical_answer()` 里映射回中文再落库——所以换语言不会分裂历史数据，
-也不会让 `_dist()`/`_accepted()` 这类按标签取值的代码失效。
-
-图谱（`desktop-plugins/`）的界面文案目前仍是中文，未接入 i18n。
+- 不在 core 里 `import agent.*`（`tests/test_settings.py::test_core_never_imports_a_host`）。
+- 不在 adapter 里写 SQL 或召回逻辑。
+- 不复制默认值到 adapter：`test_defaults_are_the_pre_split_values` 钉住 core 的那一份。

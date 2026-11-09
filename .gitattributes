@@ -1,1 +1,12 @@
+# Keep the repository LF in both directions: a Windows checkout with core.autocrlf
+# rewrites every file and the next diff is 9000 lines of nothing.
 * text=auto eol=lf
+
+# Shell scripts must stay LF even on Windows.
+*.sh text eol=lf
+
+# Binary-ish files git should not touch.
+*.png binary
+*.jpg binary
+*.onnx binary
+*.db binary

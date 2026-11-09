@@ -1,16 +1,23 @@
+# eventmem — repository layout
+
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .venv/
-venv/
 
-# 本地数据与模型，别提交
+# Local data — never in a repo
 *.db
 *.db-wal
 *.db-shm
-*.onnx
-*.gguf
-models/
+events.db*
 
+# Editors / OS
 .DS_Store
-Thumbs.db
+.idea/
+.vscode/
+
+# Syncthing conflict copies (the vault has bitten us before)
+*.sync-conflict-*

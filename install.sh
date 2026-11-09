@@ -1,33 +1,49 @@
 #!/usr/bin/env bash
-# Link eventmem into a Hermes home. Safe to re-run: existing targets are left alone.
+# Install the eventmem Hermes adapter into a Hermes home.
+#
+#   ./install.sh                 # links into ~/.hermes
+#   HERMES_HOME=/path ./install.sh
+#
+# The plugin is a SYMLINK, not a copy: edit the repository, restart the host, done.
+# (Hermes loads memory providers from $HERMES_HOME/plugins/<name>/, and the directory
+# name is the provider name, which is why the link is named "eventmem".)
 set -euo pipefail
 
-HERE=$(cd "$(dirname "$0")" && pwd)
-HERMES_HOME=${HERMES_HOME:-$HOME/.hermes}
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
+PLUGIN_DIR="$HOME_DIR/plugins"
+TARGET="$REPO/adapters/hermes/eventmem"
+LINK="$PLUGIN_DIR/eventmem"
 
-mkdir -p "$HERMES_HOME/plugins" "$HERMES_HOME/desktop-plugins"
+if [ ! -f "$TARGET/plugin.yaml" ]; then
+  echo "install.sh: $TARGET/plugin.yaml not found — is this the repository root?" >&2
+  exit 1
+fi
 
-link() { # src dst
-  if [ -e "$2" ] || [ -L "$2" ]; then
-    echo "skip  $2  (已存在，没动它)"
-  else
-    ln -s "$1" "$2"
-    echo "link  $2 -> $1"
-  fi
-}
+mkdir -p "$PLUGIN_DIR"
 
-link "$HERE/plugins/eventmem" "$HERMES_HOME/plugins/eventmem"
-link "$HERE/plugins/eventmem-graph" "$HERMES_HOME/plugins/eventmem-graph"
-link "$HERE/desktop-plugins/eventmem-graph" "$HERMES_HOME/desktop-plugins/eventmem-graph"
+if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+  backup="$LINK.bak-$(date +%Y%m%d-%H%M%S)"
+  mv "$LINK" "$backup"
+  echo "moved the old plugin directory to $backup"
+fi
 
-cat <<'EOF'
+ln -sfn "$TARGET" "$LINK"
+echo "linked $LINK -> $TARGET"
 
-下一步：
-  hermes config set memory.provider eventmem      # 启用记忆
-  hermes plugins enable eventmem-graph            # 要 3D 图谱才需要
-  # 重启会话 / gateway 后生效
+cat <<EOF
 
-可选：关系边（没有也能用，只是没有边）
-  python3 plugins/eventmem/worker.py --once       # 手动跑一轮
-  python3 plugins/eventmem/worker.py              # 常驻，每 60s 看一次
+Next steps
+  1. config.yaml:   memory:
+                      provider: 'eventmem'
+                    plugins:
+                      entries:
+                        eventmem:
+                          settings: {}     # optional; core defaults apply
+  2. the model service (optional, edges only): systemd unit running
+       $HOME/models/startlux/start.sh
+  3. the resident worker (edges):
+       systemctl --user edit eventmem-worker
+       ExecStart=%h/.hermes/hermes-agent/.venv/bin/python $REPO/adapters/hermes/run.py worker --db %h/.hermes/eventmem/events.db
+  4. restart the host processes that serve sessions (dashboard / gateway / desktop).
 EOF

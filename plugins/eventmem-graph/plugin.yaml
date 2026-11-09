@@ -1,8 +1,0 @@
-name: eventmem-graph
-version: 0.1.0
-description: >-
-  eventmem 的 3D 记忆图谱：只提供 /api/plugins/eventmem-graph 后端（读 events.db，
-  支持人工改正文/类型/关系）。UI 在 ~/.hermes/desktop-plugins/eventmem-graph/。
-tags:
-  - memory
-  - viz

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eventmem-core"
+version = "0.2.0"
+description = "Event-shaped local memory: append-only events, human-named projects, nightly relation edges."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "wackyju2-beep" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Database :: Database Engines/SQLite",
+]
+
+[project.optional-dependencies]
+# The vector arm.  Without these recall degrades to FTS5-only; nothing else changes.
+vector = ["numpy>=1.26,<3", "onnxruntime>=1.20,<2", "tokenizers>=0.20,<1"]
+
+[project.urls]
+Repository = "https://github.com/wackyju2-beep/hermes-eventmem"
+
+[tool.setuptools]
+packages = ["eventmem_core"]
+package-dir = { eventmem_core = "eventmem_core" }
