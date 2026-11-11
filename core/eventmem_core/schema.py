@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # ``PRAGMA`` statements are deliberately absent: journal_mode / foreign_keys are no-ops inside a
 # transaction, and executescript() commits whatever is pending. ensure_schema() sets them first.
@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS edges (
   cross      INTEGER NOT NULL DEFAULT 0,
   probs      TEXT,
   edited_ts  REAL,                              -- 非 NULL = 人工在可视化界面改过（彩虹高光）
+  backend    TEXT NOT NULL DEFAULT '',          -- v8：哪个决策后端判的（pack 名 / default）
   PRIMARY KEY (src, dst, rel)
 );
 
@@ -208,6 +209,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "art_path" not in event_cols:
         conn.execute("ALTER TABLE events ADD COLUMN art_path TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_art_path ON events(art_path)")
+
+    # v8: 这条边是哪个决策后端判的。换后端（云端 Jev / 本地 4B / LM Studio）后 probs 的
+    # 分布形状不同，重算 margin 时必须知道来源；decided_by 仍然只回答「谁算的」。
+    if "backend" not in edge_cols:
+        conn.execute("ALTER TABLE edges ADD COLUMN backend TEXT NOT NULL DEFAULT ''")
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

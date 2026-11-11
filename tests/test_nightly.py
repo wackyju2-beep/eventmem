@@ -201,7 +201,7 @@ class FakeStore:
         return [dict(e) for e in rows[: max(0, int(limit))]]
 
     # --- writes
-    def add_edge(self, src, dst, rel, conf, decided_by, cross=None, probs=None):
+    def add_edge(self, src, dst, rel, conf, decided_by, cross=None, probs=None, backend=""):
         for edge in self.edges:
             if edge["src"] == src and edge["dst"] == dst and edge["rel"] == rel:
                 return  # contract: duplicate ignored
@@ -218,6 +218,7 @@ class FakeStore:
                 "decided_by": decided_by,
                 "cross": int(cross),
                 "probs": probs,
+                "backend": backend,
             }
         )
 
@@ -885,6 +886,74 @@ def test_jev_probability_helper():
 # main
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# progress + graceful stop (the console's live counter and its two buttons)
+# --------------------------------------------------------------------------- #
+
+def _three_events():
+    return FakeStore(
+        [make_event(1, T, "盘 256G", 1), make_event(2, T + 60, "盘 2T", 1),
+         make_event(3, T + 120, "再买一块", 1)],
+        vecs={1: unit(0), 2: unit(0), 3: unit(0)},
+    )
+
+
+def test_progress_hook_fires_once_per_answered_pair():
+    """The console's +1 comes from here, after the pair is decided — not before."""
+    store = _three_events()
+    jev = FakeJev({"change": 0.9})
+    ticks: list[dict] = []
+    res = build_edges(store, jev, T - 1, on_progress=ticks.append)
+    check("progress: one tick per pair", len(ticks) == res["pairs"], f"{len(ticks)} vs {res['pairs']}")
+    check("progress: the counter climbs", [t["pairs"] for t in ticks] == list(range(1, len(ticks) + 1)),
+          repr([t["pairs"] for t in ticks]))
+    check("progress: edges are counted", ticks[-1]["edges"] == res["edges"], repr(ticks[-1]))
+
+
+def test_progress_reports_the_backend_in_use():
+    class Named(FakeJev):
+        active_name = "win-autothink"
+
+    store = _three_events()
+    ticks: list[dict] = []
+    build_edges(store, Named({"change": 0.9}), T - 1, on_progress=ticks.append)
+    check("progress: backend named", ticks and ticks[-1]["backend"] == "win-autothink", repr(ticks[-1:]))
+
+
+def test_a_broken_progress_hook_costs_nothing():
+    store = _three_events()
+
+    def boom(_state):
+        raise RuntimeError("the UI went away")
+
+    res = build_edges(store, FakeJev({"change": 0.9}), T - 1, on_progress=boom)
+    check("broken hook: the pass still runs", res["pairs"] >= 1 and res["skipped"] is None, repr(res))
+
+
+def test_a_stop_before_the_first_pair_asks_nothing():
+    store = _three_events()
+    jev = FakeJev({"change": 0.9})
+    res = build_edges(store, jev, T - 1, should_stop=lambda: True)
+    check("stop: reported as stopped", res["skipped"] == "stopped", repr(res))
+    check("stop: flagged", res.get("stopped") is True, repr(res))
+    check("stop: no request was made", jev.calls == [], repr(jev.calls))
+
+
+def test_a_stop_after_one_pair_keeps_that_pair():
+    """Graceful by construction: the pair in flight lands, the rest waits for the next pass."""
+    store = _three_events()
+    asked = {"n": 0}
+
+    def should_stop():
+        asked["n"] += 1
+        return asked["n"] > 1
+
+    res = build_edges(store, FakeJev({"change": 0.9}), T - 1, should_stop=should_stop)
+    check("stop: one pair done", res["pairs"] == 1, repr(res))
+    check("stop: then stopped", res["skipped"] == "stopped", repr(res))
+    check("stop: the pair was kept", len(store.edges) >= 1, repr(store.edges))
+
+
 TESTS = [
     ("jev unavailable", test_jev_unavailable_short_circuits),
     ("q1 two questions", test_q1_asks_two_questions_and_writes_change),
@@ -917,6 +986,11 @@ TESTS = [
     ("jev payload/parsing", test_jev_payload_and_parsing),
     ("jev malformed", test_jev_malformed_responses),
     ("jev probability helper", test_jev_probability_helper),
+    ("progress per pair", test_progress_hook_fires_once_per_answered_pair),
+    ("progress backend", test_progress_reports_the_backend_in_use),
+    ("progress hook broken", test_a_broken_progress_hook_costs_nothing),
+    ("stop before first pair", test_a_stop_before_the_first_pair_asks_nothing),
+    ("stop after one pair", test_a_stop_after_one_pair_keeps_that_pair),
 ]
 
 

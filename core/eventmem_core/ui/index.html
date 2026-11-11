@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eventmem</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>eventmem <small id="db">—</small></h1>
+  <nav>
+    <button data-tab="overview" class="on">概览</button>
+    <button data-tab="backends">后端</button>
+    <button data-tab="models">模型</button>
+    <button data-tab="schedule">调度</button>
+    <button data-tab="logs">日志</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="pill" id="health">连接中…</span>
+  <button class="btn" id="run-once" title="立刻跑一轮连边">跑一轮</button>
+</header>
+
+<main>
+
+<!-- ------------------------------------------------------------------ 概览 -->
+<section id="tab-overview" class="on">
+  <div class="grid c3" style="margin-bottom:14px">
+    <div class="card"><h2>事件</h2><div class="big" id="n-events">—</div>
+      <div class="sub" id="n-newest">—</div></div>
+    <div class="card"><h2>边 / 已判对</h2><div class="big" id="n-edges">—</div>
+      <div class="sub" id="n-pairs">—</div></div>
+    <div class="card"><h2>连边落后</h2><div class="big" id="n-behind">—</div>
+      <div class="sub" id="n-lag">—</div></div>
+  </div>
+
+  <div class="grid c2">
+    <div class="card">
+      <h2>kind 分布</h2>
+      <table id="kinds"><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h2>项目（按事件数）</h2>
+      <table id="projects"><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>最近几轮 pass</h2>
+    <table id="runs"><tbody></tbody></table>
+    <div class="hint">一轮 pass 只处理游标之后的积压事件；一对判定约 6–12 秒（CPU 小主机）。</div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>后端链路（decision.backends）</h2>
+    <div class="chainline" id="chain-overview"></div>
+    <div class="hint">顺序即回退顺序：一轮开始时逐项探活，第一个活着的负责整轮。</div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ 后端 -->
+<section id="tab-backends">
+  <div class="card">
+    <h2>链路顺序</h2>
+    <div class="chainline" id="chain-editor"></div>
+    <div class="row" style="margin-top:10px">
+      <select id="chain-add" class="grow"></select>
+      <button class="btn" id="chain-add-btn">加到末尾</button>
+      <button class="btn primary" id="chain-save">保存链路</button>
+    </div>
+    <div class="hint">空链路 = 只用 <code>decision.url</code> 那个单端点（v2.1 行为）。</div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>新建后端</h2>
+    <div class="row">
+      <select id="new-template" class="grow">
+        <option value="cloud">云端 API（System One 协议）</option>
+        <option value="lmstudio">LM Studio / 已装好的本地服务</option>
+        <option value="local">本地 GGUF（自己托管，daemon 负责启动）</option>
+      </select>
+      <input id="new-name" placeholder="名字，例如 typesafe / lev" style="max-width:240px">
+    </div>
+    <label>config.yaml（可以先改再保存）</label>
+    <textarea id="new-config" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="new-save">创建</button>
+      <span class="hint" style="margin:0">创建后还要把它加进链路，再重启 daemon 才会自动拉起本地进程。</span>
+    </div>
+  </div>
+
+  <div id="pack-list" style="margin-top:14px"></div>
+</section>
+
+<!-- ------------------------------------------------------------------ 模型 -->
+<section id="tab-models">
+  <div class="grid c2">
+    <div class="card">
+      <h2>运行时</h2>
+      <div id="llama-line" class="meta">—</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="install-llama">下载/更新 llama.cpp</button>
+        <span class="hint" style="margin:0">按本机硬件自动选包，路径记在 <code>runtimes/llama.cpp/current.json</code></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>已装模型</h2>
+      <table id="model-table"><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>安装 GGUF + 生成 pack</h2>
+    <div class="row">
+      <div class="grow"><label>后端名</label><input id="inst-name" value="lev"></div>
+      <div class="grow"><label>HuggingFace repo</label><input id="inst-repo" value="ggml-org/lev-GGUF"></div>
+      <div class="grow"><label>量化</label><input id="inst-quant" value="Q4_K_M"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="row" style="margin:0;gap:6px"><input type="checkbox" id="inst-skip" style="width:auto"> 跳过 llama.cpp（我已经有）</label>
+      <label class="row" style="margin:0;gap:6px"><input type="checkbox" id="inst-chain" style="width:auto"> 装完自动加入链路</label>
+      <div class="spacer"></div>
+      <button class="btn primary" id="inst-go">开始安装</button>
+    </div>
+    <div style="margin-top:12px">
+      <div class="row"><span class="sub" id="job-phase">—</span><div class="spacer"></div>
+        <span class="sub" id="job-num"></span></div>
+      <div class="bar" style="margin-top:6px"><i id="job-bar" style="width:0%"></i></div>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ 调度 -->
+<section id="tab-schedule">
+  <div class="card">
+    <h2>预设（每轮问多少对）</h2>
+    <div class="row">
+      <button class="btn" data-preset="light">轻</button>
+      <button class="btn" data-preset="normal">标准（默认）</button>
+      <button class="btn" data-preset="deep">深</button>
+      <div class="spacer"></div>
+      <span class="sub" id="cost">—</span>
+    </div>
+    <div class="hint">Tier1 = 全局向量近邻；Tier2 = 同会话近期 + 未闭环教训 + 决策骨架；Tier3 = 跨项目。</div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Tier 明细</h2>
+    <div class="grid c3">
+      <div><label>Tier1 · 向量近邻 top-k</label><input id="f-heads" type="number" min="1"></div>
+      <div><label>Tier1 · 余弦下限</label><input id="f-cos" type="number" step="0.05" min="0" max="1"></div>
+      <div><label>Tier1 · 写边 margin</label><input id="f-margin" type="number" step="0.01" min="0" max="1"></div>
+      <div><label>Tier2 · 同会话最近 top-k</label><input id="f-session" type="number" min="1"></div>
+      <div><label>Tier2 · 未闭环教训</label><input id="f-lessons" type="number" min="0"></div>
+      <div><label>Tier2 · 决策骨架</label><input id="f-skeleton" type="number" min="0"></div>
+      <div><label>Tier3 · 跨项目 top-k</label><input id="f-cross" type="number" min="1"></div>
+      <div><label>Tier3 · 余弦下限</label><input id="f-crosscos" type="number" step="0.05" min="0" max="1"></div>
+      <div><label>轮询间隔（秒）</label><input id="f-poll" type="number" min="5"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="sched-save">保存</button>
+      <button class="btn ghost" id="sched-reset">全部恢复默认</button>
+      <span class="hint" style="margin:0" id="sched-file">—</span>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------------ 日志 -->
+<section id="tab-logs">
+  <div class="card">
+    <h2>本进程日志（最近 400 条）</h2>
+    <pre class="log" id="log-body">—</pre>
+    <div class="row" style="margin-top:10px">
+      <label class="row" style="margin:0;gap:6px"><input type="checkbox" id="log-follow" checked style="width:auto"> 自动刷新</label>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="log-refresh">刷新</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,9 +1,12 @@
 /**
- * eventmem-graph — 3D memory graph for the eventmem provider.
+ * eventmem-graph — the 3D memory graph, as a component.
  *
- * Left of the context meter in the status bar: a chip that opens the graph page.
- * Drag = orbit, wheel = zoom, click an atom/edge = focus + inspect; edits are written back
- * through `/api/plugins/eventmem-graph` and get a rainbow rim.
+ * Headless: it registers no route and no status-bar chip. The graph is the 图谱 tab inside
+ * `eventmem-gui`; this module keeps the rendering (orbit/zoom/focus/edit) and the data path
+ * (`/api/plugins/eventmem-graph`) and hands its component to the console through
+ * `globalThis.__eventmemGraph`.
+ *
+ * Drag = orbit, wheel = zoom, click an atom/edge = focus + inspect; edits get a rainbow rim.
  *
  * Plain ESM, loaded uncompiled — jsx() calls, not JSX syntax.
  */
@@ -12,11 +15,7 @@ import {
   Button,
   EmptyState,
   GlyphSpinner,
-  ROUTES_AREA,
-  STATUSBAR_AREAS,
-  Tip,
   haptic,
-  host,
   useQuery,
   useQueryClient
 } from '@hermes/plugin-sdk'
@@ -24,7 +23,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'eventmem-graph'
-const PAGE = '/eventmem-graph'
 
 const KIND_COLORS = {
   决定: '#6aa9ff',
@@ -106,8 +104,11 @@ const CSS = `
 .em-seg-btn{font-size:11px;padding:3px 8px;line-height:1.35;color:var(--ui-text-tertiary);background:transparent;border:0;cursor:pointer}
 .em-seg-btn:hover{background:var(--chrome-action-hover);color:var(--ui-text-primary)}
 .em-seg-btn[data-on="1"]{background:color-mix(in srgb,var(--ui-accent) 20%,transparent);color:var(--ui-text-primary)}
-.em-select{height:24px;font-size:11px;padding:0 6px;border-radius:5px;background:var(--ui-bg-input);color:var(--ui-text-primary);
-  border:1px solid var(--ui-stroke-secondary);outline:none;max-width:260px}
+.em-select{height:24px;font-size:11px;padding:0 6px;border-radius:5px;background:var(--ui-bg-tertiary);color:var(--ui-text-primary);
+  border:1px solid var(--ui-stroke-secondary);outline:none;max-width:260px;
+  appearance:none;-webkit-appearance:none}
+  /* --ui-bg-input is #fcfcfc in both themes (host styles.css:314), so a native select
+     stays white in dark mode; appearance:none is what stops the UA painting it. */
 .em-value{min-width:150px}
 .em-check{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--ui-text-tertiary);cursor:pointer;user-select:none}
 .em-check input{accent-color:var(--ui-accent);margin:0}
@@ -1808,52 +1809,30 @@ function GraphPage({ ctx }) {
   })
 }
 
-// --------------------------------------------------------------------------- chip + register
-
-function GraphChip() {
-  return jsx(Tip, {
-    label: 'eventmem 记忆图谱（三维）',
-    children: jsx('button', {
-      type: 'button',
-      className: 'em-chip',
-      onClick: () => {
-        haptic('tap')
-        host.navigate(PAGE)
-      },
-      children: jsxs('span', {
-        className: 'em-chip-inner',
-        children: [
-          jsx('span', { className: 'em-chip-glyph', children: '◈' }),
-          jsx('span', { className: 'em-chip-text', children: '记忆图谱' })
-        ]
-      })
-    })
-  })
-}
+// --------------------------------------------------------------------------- register
 
 export default {
   id: ID,
   name: 'eventmem graph',
-  description: 'eventmem 的三维记忆图谱：原子按类型着色、关系边着色，可筛选、聚焦与人工校正。',
+  description: 'eventmem 的三维记忆图谱（作为「记忆后台 → 图谱」页渲染）：原子按类型着色、关系边着色，可筛选、聚焦与人工校正。',
   register(ctx) {
+    // Headless view provider: no route, no status-bar chip — the graph is a tab inside
+    // `eventmem-gui` now. This plugin only hands its page over and keeps the data path
+    // (/api/plugins/eventmem-graph/*) alive.
+    //
+    // Runtime plugins are evaluated from blob: URLs, so a relative import is impossible;
+    // a global is the only way to hand a component over.
+    globalThis.__eventmemGraph = { GraphPage, ctx, version: 1 }
+    ctx.onDispose(() => {
+      if (globalThis.__eventmemGraph && globalThis.__eventmemGraph.ctx === ctx) {
+        delete globalThis.__eventmemGraph
+      }
+    })
+
     const style = document.createElement('style')
     style.dataset.plugin = ID
     style.textContent = CSS
     document.head.append(style)
     ctx.onDispose(() => style.remove())
-
-    ctx.register({
-      id: 'eventmem-graph-page',
-      area: ROUTES_AREA,
-      title: '记忆图谱',
-      data: { path: PAGE },
-      render: () => jsx(GraphPage, { ctx })
-    })
-    ctx.register({
-      id: 'eventmem-graph-chip',
-      area: STATUSBAR_AREAS.right,
-      order: 10,
-      render: () => jsx(GraphChip, {})
-    })
   }
 }

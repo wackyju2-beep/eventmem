@@ -10,7 +10,7 @@ eventmem 记住的是哪条事实取代了哪条、哪天、多大把握。
 
 一个 SQLite 文件，不需要 API key，不需要 GPU：事件只追加，五种有向关系，判定模型跑在 CPU 上。
 
-<sub>v0.2.1 · schema v7 · 237 项检查</sub>
+<sub>v0.3.0 · schema v8 · 343 项检查</sub>
 
 这套东西是给我自己的 agent 写的，机器是一台没有显卡的小主机。起因很具体：切块记忆每次递过来一整段话，
 里面总有一半句子已经被更新的东西替代了，而库里没有任何字段告诉我哪一半。模型只能猜；猜错就把三个月前的
@@ -121,7 +121,8 @@ HTTP 请求是连你自己的判定服务（`EVENTMEM_JEV_URL`，缺省 `http://
 边界的判据只有一个问题：**换一个宿主，这段代码还成立吗？** 成立就在 core。
 
 ```
-core/eventmem_core/          schema · store · recall · embed · 连边 · worker · i18n
+core/eventmem_core/          schema · store · recall · embed · 连边 · packs · decision
+                             runtime · daemon · install · worker · ui · i18n
 adapters/hermes/             所有知道 Hermes 存在的东西
   eventmem/                  记忆 provider：工具面、中间件、回合末抽取、配置
   eventmem-graph/            图谱后端（dashboard 插件）
@@ -190,9 +191,49 @@ plugins:
 hermes plugins enable eventmem-graph   # 要图谱才需要
 ```
 
-重启会话后生效。数据库建在 `~/.hermes/eventmem/events.db`，第一次写入时自动建表（schema v7）。
+重启会话后生效。数据库建在 `~/.hermes/eventmem/events.db`，第一次写入时自动建表（schema v8）。
 所有阈值都在 `plugins.entries.eventmem.settings` 下，默认值和含义见
 [`docs/settings.md`](docs/settings.md)。
+
+### 判关系的模型是一个文件夹（v0.3）
+
+用哪个模型判关系，不再是插件里的一个设置项，而是一个目录：
+
+```
+~/.hermes/eventmem/backends/lev/config.yaml
+```
+
+三种形态，由文件里写了哪些键决定：`weights:`（eventmem 自己拉起 `llama-server`）、
+`base_url:` + `external: true`（别人在跑：LM Studio、systemd、start.sh）、只写 `base_url:`
+（云端）。**把文件夹放进去就是安装**。完整键表、回退规则、排错表见
+[`docs/backends.md`](docs/backends.md)，能直接拷的样例在 [`examples/backends/`](examples/backends/)。
+
+自托管路径一条命令——按本机硬件选 `llama.cpp` 包、下 GGUF、校验 sha256、写好 pack：
+
+```bash
+PY=~/.hermes/hermes-agent/.venv/bin/python
+$PY ~/eventmem/adapters/hermes/run.py models install lev
+```
+
+然后配链路，写在 `~/.hermes/eventmem/settings.yaml`（GUI 和手写读写同一份）：
+
+```yaml
+decision:
+  backends: [typesafe, lev]      # 谁先活着，谁负责整轮
+```
+
+没配 key 的 `typesafe` 不算错：探活返回 `needs_key`，链路自动走到 `lev`，每条边都记着是哪个后端
+判的（`edges.backend`）。链路为空 = 只用 `decision.url` 那个单端点，也就是 v0.2 的行为。
+
+`run.py daemon` 是这一切背后的常驻进程：轮询、只在有活时拉起自托管 pack，并在
+**http://127.0.0.1:9123/** 提供一个 GUI（概览 / 后端 / 模型 / 调度 / 日志），它只是同一套 JSON
+路由的薄客户端。
+
+这个地址只在跑 daemon 的那台机器上存在——桌面端连的是**远端** backend 时就正好用不了。所以
+adapter 里还带了一个 `eventmem-gui` dashboard 插件，把整个管理台原样挂到 dashboard 自己的源下
+（`/api/plugins/eventmem-gui/`，走 dashboard 的登录鉴权）。在 app 里它是状态栏那颗 **记忆后台**
+按钮；在浏览器里就是 dashboard 主机上的同一个路径，不用记隧道。daemon 在别的机器上时，用
+`EVENTMEM_DAEMON_URL` 把代理指过去。
 
 向量臂（可选）：`pip install onnxruntime tokenizers numpy`，再把 Qwen3-Embedding-0.6B 的 ONNX
 （512 维 int8）放进 `~/localmem/models/`。缺任何一个都只是静默降级到纯 FTS。
@@ -212,7 +253,7 @@ hermes plugins enable eventmem-graph   # 要图谱才需要
 
 模型每回合还会收到一行现有项目，按与本回合的相关度排序，所以它在选项目或新建项目之前先知道有什么。
 
-图谱在桌面版：状态栏右侧的「记忆图谱」，或路由 `/eventmem-graph`。
+图谱在桌面版：**记忆后台 → 图谱**页（`eventmem-graph` 插件本身不再有按钮和页面，它只把三维视图交给控制台）。
 
 | 操作 | 效果 |
 |---|---|
@@ -233,25 +274,29 @@ hermes plugins enable eventmem-graph   # 要图谱才需要
 
 ```bash
 cd ~/eventmem
-for t in store recall nightly worker i18n plugin settings hermes_settings; do
+for t in store recall nightly worker i18n plugin settings hermes_settings \
+         packs decision daemon install ui gui_proxy; do
   python3 tests/test_$t.py | tail -1
 done
 ```
 
 ```
-store            PASS 31
-recall           PASS 33
-nightly          PASS 93
-worker           PASS 3
-i18n             PASS 10
-plugin           PASS 43
-settings         PASS 14
-hermes_settings  PASS 10
+store            PASS 32      packs            PASS 27
+recall           PASS 33      decision         PASS 21
+nightly          PASS 93      daemon           PASS 16
+worker           PASS 3       install          PASS 19
+i18n             PASS 10      ui               PASS 15
+plugin           PASS 43      gui_proxy        PASS 7
+settings         PASS 14      ──────────────────────────
+hermes_settings  PASS 10      343
 ```
 
-237 项检查，每个用例一个自己的临时库，不碰 `~/.hermes`。召回测试用 `FakeEncoder`，
+343 项检查，每个用例一个自己的临时库，不碰 `~/.hermes`。召回测试用 `FakeEncoder`，
 没有 numpy / onnxruntime 也能全绿。`test_plugin.py` 需要宿主的 `agent.memory_provider`，
 裸机器（CI）上由 `tests/_host_stub.py` 换成一个最小桩，所以 3.11 和 3.12 的 Actions 也是全绿。
+
+v0.3 这几个套件故意做成端到端：`test_daemon` 真起子进程，`test_install` 用本地 HTTP 服务冒充
+发布页和模型仓（含 `Range` 续传），`test_ui` 走真 HTTP 调 daemon——GUI 没有别的客户端，路由就是契约。
 
 ## 已知限制
 
@@ -262,6 +307,8 @@ hermes_settings  PASS 10
 - 阈值（向量 0.35、margin 0.15、预算 600/850）是在小语料上定的，攒到几千条事件后应该重标。
 - 图谱界面和库里存的类型/关系名是中文；模型读到的文本是中英双语。
 - 这是个人项目，不是产品：没有托管服务、没有技术支持，也不承诺 schema 跨版本不变。
+- daemon 和它的 GUI 是**一个库一个进程、只绑 loopback、没有鉴权**。它是本机管理面板，
+  不要放到一个你不信任的网络上。
 
 ## 许可
 

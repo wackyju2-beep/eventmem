@@ -1,0 +1,10 @@
+# A pack eventmem launches itself: no service to install, no start script, no port to reserve.
+# `eventmem models install lev` writes this for you; this file is what it looks like.
+protocol: systemone
+model: lev
+# relative to THIS folder, which is why a pack can be copied around as one directory
+weights: ../../models/lev/lev-Q4_K_M.gguf
+launch: auto            # the llama.cpp downloaded by `models install`
+port: 0                 # 0 = pick a free port; recorded in .runtime.json
+license: apache-2.0
+note: ggml-org/lev-GGUF Q4_K_M，4B，Qwen3.5 底

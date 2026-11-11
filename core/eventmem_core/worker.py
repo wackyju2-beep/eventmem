@@ -27,13 +27,13 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 if __package__ in (None, ""):  # executed as a file: make ``eventmem_core`` importable
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eventmem_core import nightly as N  # noqa: E402
-from eventmem_core.jev import JevClient  # noqa: E402
+from eventmem_core.decision import from_settings  # noqa: E402
 from eventmem_core.settings import CoreSettings, describe  # noqa: E402
 from eventmem_core.store import Store  # noqa: E402
 
@@ -79,8 +79,17 @@ def ensure_service(script: str, url: str) -> bool:
     return healthy(url)
 
 
-def run_once(settings: CoreSettings, *, ensure: bool = True) -> dict[str, Any]:
-    """One pass.  Idle when nothing new; otherwise ask the model and write edges."""
+def run_once(settings: CoreSettings, *, ensure: bool = True,
+             prepare: Optional[Callable[[CoreSettings], None]] = None,
+             on_progress: Optional[Callable[[dict], None]] = None,
+             should_stop: Optional[Callable[[], bool]] = None,
+             avoid: tuple[str, ...] = ()) -> dict[str, Any]:
+    """One pass.  Idle when nothing new; otherwise ask the model and write edges.
+
+    *prepare* runs **after** the idle check and **before** the decision chain is built: the
+    daemon uses it to start a self-managed backend, which then has to be visible to
+    ``from_settings``.  A manual CLI run passes nothing and never launches anything.
+    """
     if not settings.db_path:
         raise ValueError("CoreSettings.db_path is empty")
     url = settings.decision.url
@@ -94,15 +103,25 @@ def run_once(settings: CoreSettings, *, ensure: bool = True) -> dict[str, Any]:
             cursor = time.time() - float(settings.edges.first_run_hours) * 3600.0
         if store.count_events_since(cursor) <= 0:
             return {"skipped": "idle", "events": 0}
-        if ensure and url and not ensure_service(settings.decision.start_script, url):
+        if prepare is not None:
+            try:
+                prepare(settings)
+            except Exception as exc:  # noqa: BLE001 - a backend that will not start is skipped
+                logger.warning("eventmem worker: prepare failed (%s)", exc)
+        # 只有单端点模式才由 worker 负责拉起服务（v2.1 的 start_script）；pack 链里的后端
+        # 不归这个脚本管——外部服务由它自己的宿主启动，自托管的那档由 daemon 的 prepare 管。
+        legacy = not tuple(settings.decision.backends or ())
+        if ensure and legacy and url and not ensure_service(settings.decision.start_script, url):
             logger.warning("eventmem worker: decision service unavailable")
             return {"skipped": "jev-unavailable"}
         run_start = time.time()
-        jev = JevClient(base_url=url or None, timeout=settings.decision.timeout,
-                        path=settings.decision.path, model=settings.decision.model,
-                        think_mode=settings.decision.think_mode or None)
-        result = N.build_edges(store, jev, cursor, settings.edges)
-        if result.get("skipped") not in ("jev-unavailable", "jev-error"):
+        jev = from_settings(settings, warn=logger.warning, avoid=avoid)
+        result = N.build_edges(store, jev, cursor, settings.edges,
+                               on_progress=on_progress, should_stop=should_stop)
+        # A stopped pass must NOT move the cursor: the untouched events would be skipped
+        # forever.  Same for the failure cases.  (Re-running a pair is safe — add_edge
+        # dedupes — so a stop costs time, never correctness.)
+        if result.get("skipped") not in ("jev-unavailable", "jev-error", "stopped"):
             # 高水位：手工 nightly 或第二个实例同时跑时，先开始的 pass 后结束也不能把游标改回去。
             store.advance_meta_ts(N.CURSOR_KEY, run_start - 120.0)
         return result

@@ -524,12 +524,17 @@ class Store:
         decided_by: str,
         cross: Optional[int] = None,
         probs: Optional[dict] = None,
+        backend: str = "",
     ) -> None:
         """Insert a relation; a repeated ``(src, dst, rel)`` is ignored, never duplicated.
 
         ``probs`` is the raw distribution the chosen label came from (axis: 4 entries with the
         server's none option; detail: 3).  It is kept so a later margin/selection change can be
         re-evaluated from the database instead of re-running the model.
+
+        ``backend`` is *which* decision backend produced it (a pack name, or ``default`` for the
+        legacy single endpoint).  Two models answer differently, so a threshold recomputed over
+        one distribution must not silently absorb the other's edges.
         """
         if rel not in RELS:
             raise ValueError(f"rel must be one of {RELS}, got {rel!r}")
@@ -538,9 +543,9 @@ class Store:
         blob = json.dumps(probs, ensure_ascii=False, sort_keys=True) if probs else None
         with self._lock:
             self._db.execute(
-                "INSERT OR IGNORE INTO edges(src, dst, rel, conf, decided_by, cross, probs) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (int(src), int(dst), rel, float(conf), decided_by, int(cross), blob),
+                "INSERT OR IGNORE INTO edges(src, dst, rel, conf, decided_by, cross, probs, backend) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (int(src), int(dst), rel, float(conf), decided_by, int(cross), blob, str(backend)),
             )
             self._db.commit()
 
@@ -750,7 +755,7 @@ class Store:
         """Edges pointing at ``eid``, each joined with the source event's ts/kind/text."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT g.src, g.dst, g.rel, g.conf, g.decided_by, g.cross, "
+                "SELECT g.src, g.dst, g.rel, g.conf, g.decided_by, g.cross, g.backend, "
                 "       e.ts AS src_ts, e.kind AS src_kind, e.text AS src_text "
                 "FROM edges g LEFT JOIN events e ON e.id = g.src "
                 "WHERE g.dst = ? ORDER BY e.ts ASC, g.src ASC",
@@ -758,7 +763,7 @@ class Store:
             ).fetchall()
         return [
             {"src": int(r["src"]), "dst": int(r["dst"]), "rel": r["rel"], "conf": float(r["conf"]),
-             "decided_by": r["decided_by"], "cross": int(r["cross"]),
+             "decided_by": r["decided_by"], "cross": int(r["cross"]), "backend": r["backend"],
              "src_ts": float(r["src_ts"]) if r["src_ts"] is not None else None,
              "src_kind": r["src_kind"], "src_text": r["src_text"]}
             for r in rows
@@ -772,7 +777,7 @@ class Store:
         """
         with self._lock:
             rows = self._db.execute(
-                "SELECT g.src, g.dst, g.rel, g.conf, g.decided_by, g.cross, "
+                "SELECT g.src, g.dst, g.rel, g.conf, g.decided_by, g.cross, g.backend, "
                 "       e.ts AS dst_ts, e.kind AS dst_kind, e.text AS dst_text "
                 "FROM edges g LEFT JOIN events e ON e.id = g.dst "
                 "WHERE g.src = ? ORDER BY e.ts ASC, g.dst ASC",
@@ -780,7 +785,7 @@ class Store:
             ).fetchall()
         return [
             {"src": int(r["src"]), "dst": int(r["dst"]), "rel": r["rel"], "conf": float(r["conf"]),
-             "decided_by": r["decided_by"], "cross": int(r["cross"]),
+             "decided_by": r["decided_by"], "cross": int(r["cross"]), "backend": r["backend"],
              "dst_ts": float(r["dst_ts"]) if r["dst_ts"] is not None else None,
              "dst_kind": r["dst_kind"], "dst_text": r["dst_text"]}
             for r in rows

@@ -1,0 +1,7 @@
+# LM Studio (or any local server you installed yourself).
+# Load a decision model in LM Studio first; the point of this shape is that we never touch the process.
+protocol: systemone
+model: lev
+external: true
+base_url: http://127.0.0.1:1234
+note: LM Studio 要先加载一个 decision model

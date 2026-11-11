@@ -20,9 +20,10 @@ jobs:
       # encoder degrades to FTS and the fakes cover the rest, so don't install them.
       # tests/_host_stub.py supplies the host names the adapter imports.
       #
-      # PyYAML is the one real dependency.  Turning config.yaml into CoreSettings is
-      # the adapter's whole job (tests/test_hermes_settings.py), and with no parser
-      # every override silently falls back to the core defaults.
+      # PyYAML is the one real dependency.  It guards two things: turning config.yaml
+      # into CoreSettings (tests/test_hermes_settings.py — with no parser every override
+      # silently falls back to the core defaults), and reading a backend pack's
+      # config.yaml (tests/test_packs.py, which says what to install when it is absent).
       - name: install PyYAML
         run: python3 -m pip install --disable-pip-version-check pyyaml
       - name: run all test scripts

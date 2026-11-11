@@ -52,6 +52,7 @@ import math
 import os
 import struct
 import time
+from typing import Callable, Optional
 
 from .i18n import is_zh  # noqa: E402
 from .settings import CoreSettings, EdgePolicy, describe  # noqa: E402
@@ -175,14 +176,21 @@ NONE_LABEL = "都不是"
 # --------------------------------------------------------------------------- #
 
 
-def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None) -> dict:
+def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None, *,
+                on_progress: Optional[Callable[[dict], None]] = None,
+                should_stop: Optional[Callable[[], bool]] = None) -> dict:
     """Build relation edges for events newer than ``since_ts``.
 
     Returns ``{"pairs": n, "edges": m, "skipped": reason}`` where ``pairs`` is
     the number of pairs actually sent to the decision model and ``edges`` the
     number of edges handed to ``store.add_edge`` (duplicates are dropped by the
     store, not here).  ``skipped`` is ``None`` on a normal run, otherwise one of
-    ``"jev-unavailable"``, ``"no-new-events"`` or ``"jev-error"``.
+    ``"jev-unavailable"``, ``"no-new-events"``, ``"jev-error"`` or ``"stopped"``.
+
+    ``on_progress`` is called after every answered pair (the console's live counter) and
+    ``should_stop`` is asked before each one: a stop is therefore graceful — the pair in
+    flight finishes, the cursor stays put, and the next pass redoes what is left
+    (``add_edge`` dedupes, so a redone pair costs time, never correctness).
     """
     try:
         if not jev.available():
@@ -190,7 +198,8 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None)
     except Exception:  # noqa: BLE001 - a broken client is an unavailable one
         return {"pairs": 0, "edges": 0, "skipped": "jev-unavailable"}
 
-    return _Nightly(store, jev, policy).run(since_ts)
+    return _Nightly(store, jev, policy, on_progress=on_progress,
+                    should_stop=should_stop).run(since_ts)
 
 
 # --------------------------------------------------------------------------- #
@@ -199,16 +208,21 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None)
 
 
 class _Nightly:
-    def __init__(self, store, jev, policy: "EdgePolicy | None" = None):
+    def __init__(self, store, jev, policy: "EdgePolicy | None" = None, *,
+                 on_progress: Optional[Callable[[dict], None]] = None,
+                 should_stop: Optional[Callable[[], bool]] = None):
         self.store = store
         self.jev = jev
         self.pol = policy or _POLICY
+        self.on_progress = on_progress
+        self.should_stop = should_stop
 
         self.pairs = 0
         self.edges = 0
         self._seen_pairs: set[tuple[int, int]] = set()
         self._fail_streak = 0
         self._aborted = False
+        self._stopped = False
 
         self._events: dict[int, dict] | None = None
         self._vecs: dict[int, tuple[float, ...]] | None = None
@@ -231,7 +245,7 @@ class _Nightly:
 
         new.sort(key=lambda ev: (_ts(ev), _id(ev)))
         for ev in new:
-            if self._aborted:
+            if self._aborted or self._stopped:
                 break
             try:
                 self._consider(ev)
@@ -241,7 +255,9 @@ class _Nightly:
         result = {
             "pairs": self.pairs,
             "edges": self.edges,
-            "skipped": "jev-error" if self._aborted else None,
+            "backend": self._backend_name(),
+            "skipped": "jev-error" if self._aborted else ("stopped" if self._stopped else None),
+            "stopped": self._stopped,
         }
         if self._aborted:
             _log.warning("eventmem nightly: aborted after %d decide failures (pairs=%d edges=%d)",
@@ -311,7 +327,12 @@ class _Nightly:
         for other in picked.values():
             if self._aborted:
                 return
+            if self.should_stop is not None and self.should_stop():
+                self._stopped = True
+                _log.info("eventmem nightly: stop requested, %d pairs done", self.pairs)
+                return
             self._ask_and_write(other, ev)
+            self._tick()
 
     # -------------------------------------------------------------- asking
 
@@ -391,19 +412,43 @@ class _Nightly:
             self._aborted = True
         return None
 
+    def _tick(self) -> None:
+        """Publish progress after a pair.  A broken listener loses itself, not the pass."""
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress({
+                "pairs": self.pairs,
+                "edges": self.edges,
+                "backend": self._backend_name(),
+            })
+        except Exception:  # noqa: BLE001 - a UI hook must never cost a pair
+            _log.warning("eventmem nightly: progress hook failed; disabled")
+            self.on_progress = None
+
+    def _backend_name(self) -> str:
+        """Which backend decided this edge; the legacy client has no name at all."""
+        return str(getattr(self.jev, "active_name", "") or "")
+
     def _write(
         self, src: int, dst: int, rel: str, conf: float, probs: dict | None = None
     ) -> bool:
-        try:
-            self.store.add_edge(
-                src, dst, rel, float(conf), decided_by="jev", probs=probs
-            )
-        except TypeError:  # a store/fake without the ``probs`` argument
+        backend = self._backend_name()
+        # 由强到弱试：带 backend + probs → 只带 probs → 什么也不带。
+        # 后两档是为了老的 store/测试替身；真实 Store 第一档就成。
+        for extra in (
+            {"probs": probs, "backend": backend},
+            {"probs": probs},
+            {},
+        ):
             try:
-                self.store.add_edge(src, dst, rel, float(conf), decided_by="jev")
+                self.store.add_edge(src, dst, rel, float(conf), decided_by="jev", **extra)
+                break
+            except TypeError:
+                continue
             except Exception:  # noqa: BLE001 - one bad row must not kill the night
                 return False
-        except Exception:  # noqa: BLE001 - one bad row must not kill the night
+        else:
             return False
         self.edges += 1
         return True

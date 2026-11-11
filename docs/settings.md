@@ -60,11 +60,18 @@ plugins:
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `url` | `http://127.0.0.1:18090` | 决策服务根地址；**空串 = 关闭连边** |
-| `path` | `/v1/systemone` | 决策端点（LEV 兼容服务） |
-| `model` | `jev` | 请求体里的模型名（多数本地服务忽略） |
+| `path` | `/v1/systemone` | 决策端点（System One / Jev 协议；OpenAI 版是 `/v1/decisions`） |
+| `model` | `jev` | 请求体里的模型名（本地服务多忽略；云端要写 `jev-latest` 之类） |
 | `timeout` | `900` | 单请求超时（一次完整判断，不是单 token） |
 | `think_mode` | `""` | AutoThink 专用；空 = 什么都不发（Instant 模型会拒） |
 | `start_script` | `""` | worker 拉起服务用的脚本；空/不存在 = 只告警 |
+| `backends` | `()` | **后端 pack 名，按顺序回退**（`a,b` 或列表）。空 = 只用上面的 `url` |
+| `packs_dir` | `""` | pack 目录；adapter 默认填 `<hermes_home>/eventmem/backends` |
+| `probe_timeout` | `2.0` | 探活超时（一次 GET，不花 token） |
+
+`backends` 的效率契约：**一轮只探活一次**，第一个能应答的 pack 负责整轮；中途失败就中止，
+不半路换模型——两个模型的概率分布不同，同一晚的边混起来以后没法重算阈值。
+401/403 记 `needs_key`（还没拿到 key，不算故障）；每条边把来源写进 `edges.backend`。
 
 ## `recall` — 召回与渲染
 
@@ -95,3 +102,26 @@ plugins:
 ```
 
 输出是一行 JSON，包含两个 policy 的全部字段——排「为什么这次没写边」时先看它。
+
+## 三层配置文件（GUI 写的是中间那层）
+
+| 文件 | 归谁 | 谁写 |
+|---|---|---|
+| 代码里的默认值（`core/eventmem_core/settings.py`） | eventmem | — |
+| `~/.hermes/eventmem/settings.yaml` | eventmem | **GUI**、手写、`curl POST /api/config` |
+| `~/.hermes/config.yaml` 的 `plugins.entries.eventmem.settings` | Hermes | 宿主配置 |
+
+后面的层覆盖前面的层；**第三层（宿主）最后说话**，所以在 GUI 里改了没反应，先看
+`plugins.entries.eventmem.settings` 是不是也写了同一个键。
+
+`settings.yaml` 的规矩：
+
+- 写之前严格校验，坏值回 400，**磁盘不动**；
+- 传 `null` 删掉某项覆盖（回到默认）；
+- daemon 写完后立刻重读，`poll_seconds` 也是每轮重读，不用重启。
+
+```bash
+# 不用开浏览器也能改（GUI 调的就是这条）
+curl -s -X POST -H 'Content-Type: application/json' \
+     -d '{"edges":{"heads_vec_top_k":8}}' http://127.0.0.1:9123/api/config
+```

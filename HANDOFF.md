@@ -8,9 +8,20 @@
 - 运行时：`~/.hermes/plugins/eventmem` → 软链到本仓库 `adapters/hermes/eventmem`。
 - 图谱：`~/.hermes/plugins/eventmem-graph` 与 `~/.hermes/desktop-plugins/eventmem-graph` 也指向本仓库
   `adapters/hermes/` 下的对应目录（`install.sh` 一次建三条软链）。
-- 生产库：`~/.hermes/eventmem/events.db`（schema v7，171 条事件，未迁移、未改动）。
-- 连边：`eventmem-worker.service` 已换到 `adapters/hermes/run.py worker`，运行中。
-- 测试：8 个套件 **237 项**，installs venv 与裸 3.12 双解释器全绿。
+- 生产库：`~/.hermes/eventmem/events.db`（schema **v8**，2026-11-12 迁移；迁移时 282 事件 / 1642 边，
+  备份 `events.db.bak-v7-*`。`edges.backend` 为空串 = v8 之前的 StartLux 边，不是 NULL）。
+- 连边：`eventmem-worker.service` 跑的是 **daemon**（`run.py daemon`，单元名保留），管理 API + GUI 在
+  `127.0.0.1:9123`；一轮探活一次 → 整轮粘住，日志里应出现 `eventmem decision: using startlux`。
+- 生产链路（2026-11-12 切换）：`~/.hermes/eventmem/settings.yaml` 里 `decision.backends: [startlux]`，
+  pack 在 `backends/startlux/config.yaml`（`external: true`，`model: jev` 以保持请求体不变）。
+  **进程归 `startlux.service` 管**（active + enabled）：链路模式下 worker 不再跑 `decision.start_script`，
+  所以那个 unit 是唯一的启动者。边会记 `backend='startlux'`（切换前的是 `'default'`）。
+- **因此丢了一个兜底**：unit 是 `Type=oneshot` + `RemainAfterExit`，进程挂了 systemd 不会自己拉。
+  18090 掉线时 pass 记 `jev-unavailable`、游标不动（不丢数据），恢复要手动
+  `systemctl --user restart startlux`（start.sh 幂等，重启无副作用）。
+- 运行时：本机已装 llama.cpp **b12284**（`~/.hermes/eventmem/runtimes/llama.cpp/`，23 MB，
+  `run.py models list` 可见）；**没装 GGUF**——模型按需 `models install lev`（2.4 GB）。
+- 测试：14 个套件 **343 项**（packs 27 / decision 21 / daemon 16 / install 19 / ui 15 / gui_proxy 7），双解释器全绿。
 
 ## 这次改了什么
 
@@ -35,7 +46,7 @@
 
 ```bash
 cd ~/eventmem
-for t in store recall nightly worker i18n plugin settings hermes_settings; do
+for t in store recall nightly worker i18n plugin settings hermes_settings packs; do
   python tests/test_$t.py | tail -1
 done
 # 宿主加载路径（真 Hermes）
@@ -47,8 +58,163 @@ print(p.name, p.is_available(), len(p.get_tool_schemas()))
 PY
 ```
 
+## GUI 怎么开（含前后端分离）
+
+三种入口，指向同一份页面：
+
+| 场景 | 地址 |
+|---|---|
+| 在跑 daemon 的那台机器上 | `http://127.0.0.1:9123/`（完整五页） |
+| 桌面端连**远端** backend（我们的常态） | app 状态栏的 **记忆后台** 按钮 → `/eventmem-gui`：**完整控制台**，六页（概览/后端/模型/调度/日志/图谱） |
+| 手机 / 任意浏览器 | `<dashboard>/api/plugins/eventmem-gui/`（走 dashboard 登录，完整五页） |
+
+实现：`adapters/hermes/eventmem-gui/dashboard/plugin_api.py` 是纯代理，把 daemon 的
+**整张 HTTP 面**（静态页 + `/api/*`）原样转出去；`desktop-plugins/eventmem-gui/plugin.js` 是
+**原生 React 版控制台**，数据走 `ctx.rest('/api/*')`（落到 `/api/plugins/eventmem-gui/api/*`，即代理）。
+daemon 在别的机器上就 `EVENTMEM_DAEMON_URL=http://host:9123`。
+
+**不要用 iframe**：桌面端 renderer 是 `file://` 加载的，`<iframe src="/api/…">` 会解析成
+`file:///api/…`，什么都画不出来 —— 2026-11-12 就是踩了这个，表现为纯黑/纯白。插件页唯一能到
+backend 的门是 `ctx.rest`（IPC → 主进程 → 带凭据的 HTTP）。
+
+**图谱为什么能合在一个页里**：运行时插件是从 `blob:` URL 求值的，import map 只放行
+`@hermes/plugin-sdk` 和 `react*`，所以插件之间不能互相 import。`eventmem-graph` 在
+`register()` 里把 `{ GraphPage, ctx }` 挂到 `globalThis.__eventmemGraph`，控制台的「图谱」页用
+**图谱自己的 ctx** 渲染它 —— 一套实现、一条数据路径（`/api/plugins/eventmem-graph/*`）。
+graph 插件没启用时这页显示提示，不会崩。
+
+**graph 插件是 headless 的**（2026-11-12 用户要求去掉重复入口）：它不再 `ctx.register` 任何路由或
+状态栏按钮，只挂上面那个全局 + 注入 CSS。所以 `plugins.enabled` 里它必须留着，否则「图谱」页空。
+
+改完插件怎么验：`./tools/plugin-smoke/run.sh` —— 用 Hermes 自带的 react + 一个 SDK 桩，把六个页
+在 `react-dom/server` 下各渲染两遍（空数据与假数据），再单独渲染图谱组件（0 原子 / 2 原子），
+要 `SMOKE PASS` + `GRAPH SMOKE PASS`。它验不了 IPC、真实主题和点击。
+
+两个前提（改完要做的）：
+
+1. **页面用相对路径取数据**（`ui/app.js` 的 `api()` 会去掉开头的 `/`）。绝对路径在代理前缀下会
+   打到 dashboard 自己身上——`test_gui_proxy` 钉住了这条。
+2. **dashboard 插件是启动时挂载的**：加/改这个插件后要重启服务它的进程（web/手机是
+   `systemctl --user restart hermes-dashboard`；桌面端是 app 里 Cmd/Ctrl-K → Reload desktop plugins）。
+   **插件还必须在 `plugins.enabled` 里**——用户插件的 `api` 文件只有在白名单里才会被 import
+   （防代码执行的闸门）；没开白名单时路由根本不存在，iframe 打开就是一片空白（2026-11-12 踩过）。
+   开完不用重启：没挂载的路由第一次被请求时会 hot-mount。`hermes plugins enable eventmem-gui` 即可。
+3. **插件目录里不能留同名副本**：宿主按目录扫，`eventmem-graph.bak-*` 会以同一个 `id` 再加载一次，
+   启动就报 `duplicate id`。旧目录现在挪到 `<hermes_home>/plugin-backups/`（扫描根之外），
+   2026-11-12 已把两台机器上的存量 `.bak-*` 清出去。
+
+### 主题与语言（2026-11-12）
+
+**深色模式的坑**：宿主的 `--ui-bg-input` 在 `styles.css:314` 被写死成 `#fcfcfc`，深色主题从不覆盖它，
+所以任何直接用它当底色的输入框/下拉在深色下是**白底**（截图里那一排文本框）。正确写法：
+
+```css
+background: var(--ui-bg-tertiary);   /* 或 --ui-bg-editor（代码框），都是 color-mix 出来的主题色 */
+appearance: none; -webkit-appearance: none;   /* 不写这行，UA 控件会自己画白底，忽略 background */
+```
+
+外加 `color-scheme: dark` 让滚动条、勾选框、下拉弹层跟着变：控制台在挂载时读
+`getComputedStyle(document.body).backgroundColor` 算亮度，`MutationObserver` 盯着 `<html>` 的
+class/style 变化，切主题即时跟。（`plugins/.../plugin.js` 的 `probeDark` / `useDarkTheme`）
+
+**语言**：一本字典 `core/eventmem_core/ui_strings.py` 的 `EN`，**以中文原文为 key**
+（`EN["跑一轮"] = "Run a pass"`），因为两个 UI 都是无构建的纯 JS，key 化只会多一层对不上号的映射。
+daemon 在 `GET /api/i18n` 回 `{lang, map}`，`lang` 来自 `CoreSettings.language`
+（`EVENTMEM_LANG` → 宿主 `display.language` → `en`）。
+
+- 桌面控制台：每条中文都包在 `t('…')` / `fmt('…{0}…')` 里，`Console` 在首屏渲染前拉 `/api/i18n`，
+  拿不到就等（`i18n.error` 时按中文继续，不会白屏）。状态栏那颗 chip 在 `register()` 里预热字典。
+- **新增 `t('…')` 必须往 `EN` 加条目**，`tests/test_ui.py::test_every_translated_literal_has_a_dictionary_entry`
+  会把没条目的抓出来。
+- 配置模板（新建后端那三段 YAML）不共用字典：`TEMPLATES` / `TEMPLATES_EN` 两份，`templates()` 按语言选。
+- **浏览器版控制台（`http://127.0.0.1:9123/`，即 `core/eventmem_core/ui/app.js`）还没接**——它仍是纯中文。
+
+验证：`./tools/plugin-smoke/run.sh` 会用 `ui_strings.EN` 渲一遍英文，任何残留中文直接 FAIL
+（kind/关系名是入库数据，按设计不翻译，检查前已排除）。
+
+### 实时面板与两个按钮（2026-11-12）
+
+概览页上方常驻一条**运行条**（任何页签都在）：`● 正在使用 <backend> [kind]  [12 对] [9 边] +1  19s  [停止] [切换并重跑]`。
+
+数据来自新的 `GET /api/status.live`：一轮开始时由 daemon 建 `{backend, pairs, edges, since, updated}`，
+nightly 每判定完**一对**回调一次 `on_progress` 更新它（`+1` 就是 `pairs` 的增量动画），pass 结束时清空。
+同时 `status` 多了 `busy` / `stopping`。空闲时那条显示「上次 startlux · 时间 · N 对 / M 边」。
+
+| 路由 | 作用 |
+|---|---|
+| `POST /api/stop` | 协作式取消：手上这一对做完就停，**游标不动**（下一轮重做，`add_edge` 去重，代价是时间不是正确性） |
+| `POST /api/switch` | 同上 + 叫醒轮询：下一轮立刻从链首重新探活，所以「LM Studio 刚就绪」不用等慢后端跑完半小时 |
+
+实现要点：`nightly.build_edges(..., on_progress=, should_stop=)`；`should_stop` 在**每对之前**问一次；
+结果里带 `skipped: "stopped"` / `stopped: true`，`worker.run_once` 把 `"stopped"` 加进「不推进游标」的名单。
+daemon 里 `_abort`（停本轮）与 `_stop`（关进程）是两个不同事件，别混用。
+
+### 当前生产链路（2026-11-12）
+
+`~/.hermes/eventmem/settings.yaml` → `decision.backends: [win-autothink, startlux]`
+
+| # | pack | 在哪 | 形态 | 说明 |
+|---|---|---|---|---|
+| 1 | `win-autothink` | Windows `10.42.0.51:1234`（LM Studio 0.4.28，模型 `vllm-d3-mini`，`type: decision`） | external + `check_model: true` | 首选；实测 **189 对 / 331 边 / 101 s ≈ 0.53 s/对**（Mint 约 4–5 s/对） |
+| 2 | `startlux` | Mint `127.0.0.1:18090`（`startlux.service`） | external | StartLux-Decision-**v1.1**-4B-Instant |
+
+一轮 pass 只探活一次，**第一个活着的负责整轮**；中途失败中止本轮、游标不推进（不丢数据）。
+所以 Windows 关机不会丢数据，只是那一轮之后才回退。
+
+
+Windows 这一格的两个前提（2026-11-12 踩过）：
+
+- LM Studio 的 `/v1/systemone`、`/v1/decisions` **只接受 `type: decision` 的模型**。本地导入的 GGUF 会被它定性成
+  `llm`（带 chat template / tool_use），`chat/completions` 能跑但决策端点回 `invalidModelIdentifier`，
+  而且**没有界面开关能改**。判断方法是 `GET /api/v0/models` 看 `type`。
+- 决策引擎有 **30 s 硬上限**（`Engine protocol systemOne request timed out after 30000ms`），而 JIT 冷加载
+  的时间也算在里面，所以「闲一分钟 → TTL 卸载 → 下一轮冷加载超时 → 3 对失败 → 冷却 5 分钟」会成循环。
+  稳的做法是手动加载并保持：`POST /api/v1/models/load {"model":"vllm-d3-mini","context_length":8192}`
+  （手动加载的模型不受「自动卸载未使用的即时加载模型」影响），之后单次判定稳定 2.8 s。
+
+Windows 侧三件事缺一不可：① LM Studio「在网络中提供服务」打开（默认关；关着时 Mint 连 1234
+直接超时，`probe → unreachable`）；② 防火墙放行 1234 入站；③ `model:` 与 LM Studio 里的模型 id
+逐字一致 —— `check_model: true` 会在探活阶段就发现不一致并回退，而不是每轮卡在同一处。
+
+## Windows 形态（已实测 2026-11-12）
+
+daemon 在 Windows 上用**计划任务**跑，不用服务。实测通过的做法：
+
+```bat
+:: D:\eventmem\.smoke\daemon.cmd（ASCII，CRLF）
+@echo off
+cd /d D:\eventmem
+py -3.12 adapters\hermes\run.py daemon --db D:\eventmem\.smoke\events.db --port 9125 >> D:\eventmem\.smoke\daemon.log 2>&1
+```
+
+```
+schtasks /create /tn eventmem-daemon /tr "D:\eventmem\.smoke\daemon.cmd" /sc once /st 23:59 /ru <你> /it /f
+schtasks /run    /tn eventmem-daemon
+```
+
+实测：`/api/health` 回 `{"status":"ok","schema":8,...}`，日志 `api on http://127.0.0.1:9125  (GUI at /)`。
+
+两个 Windows 专属坑：
+
+- **没有 `fcntl` ≠ 有锁**。`acquire_lock` 在 Windows 返回 `NO_GUARD`（不是 `None`）；早先两者混为一谈，
+  daemon 一启动就 `another daemon already owns …` 然后 exit 1。
+- **`schtasks /end` 只杀 .cmd 外壳**，python 子进程还活着，端口和日志文件都被占住；要 `taskkill /pid <pid> /f`。
+- 计划任务里没有 `HERMES_HOME`，`packs_dir` 会落到 `%LOCALAPPDATA%\hermes\eventmem\backends`；
+  要指到别处就在 .cmd 里 `set HERMES_HOME=…`。
+
+
 ## 已知 / 下一步
 
+- **P0–P5（v3 后端平台化）已落地**：`providers.py`（两套线格式）、`packs.py`（一个文件夹 =
+  一个后端）、`decision.py`（`UrlProvider` + `Chain`：一轮探活一次、整轮粘住、401=needs_key）、
+  `runtime.py`（自托管 pack 的进程/端口/僵尸回收）、`daemon.py`（60 s 轮询 + 管理 API）、
+  `install.py`（llama.cpp 发行包匹配 + GGUF 下载/续传/校验 + 生成 pack）、`edges.backend`（v8）、
+  `ui/`（GUI：概览/后端/模型/调度/日志）与 `settings.yaml`（GUI 与手写同一份，daemon 重读即生效）。
+  自托管 pack 现在真能用：`models install lev` → 把 `lev` 加进 `decision.backends` → 重启 daemon，
+  它会在有活时把 llama-server 拉起来（端口写进 `<pack>/.runtime.json`）。
+  P5 收尾也做完了：README 中英双版、`docs/backends.md`（键表/链路/排错）、`examples/backends/` 四个
+  可直接拷的样例（并有测试盯着它们能加载），Windows 计划任务形态实测通过（见上一节）。
+  **剩下**：无。StartLux 已降级成兼容 pack（`backends/startlux`，链路 `[startlux]`，边记 `backend='startlux'`）。
 - **桌面会话仍在用旧模块**：本会话进程启动早于改动，`prefetch` 还是旧的。
   换新代码要重启 `hermes-dashboard` / `hermes-gateway`（或开新会话）。
 - `eventmem-graph`（3D 图谱）已并入：`adapters/hermes/eventmem-graph`（dashboard 后端）+

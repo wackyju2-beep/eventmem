@@ -565,7 +565,7 @@ def test_schema_v6_db_gains_art_path(store: Store) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
         assert "art_path" in cols, cols
         assert conn.execute("SELECT text FROM events").fetchone()[0] == "老事件"
-        assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "7"
+        assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(SCHEMA_VERSION)
         ensure_schema(conn)          # 幂等：第二次不再 ALTER
         conn.close()
     finally:
@@ -587,6 +587,25 @@ def test_edges_from_mirrors_edges_into(store: Store) -> None:
 
 
 # ------------------------------------------------------------------- session stickiness
+
+@case
+def test_edge_backend_survives_the_round_trip(store: Store) -> None:
+    """schema v8：边的来源能追溯。换后端后 probs 的形状不同，重算阈值必须知道是谁判的。"""
+    cols = {row[1] for row in store._db.execute("PRAGMA table_info(edges)")}
+    assert "backend" in cols, cols
+
+    a = store.add_event("决定", "老决定", ts=1000.0)
+    b = store.add_event("变更", "新变更", ts=2000.0)
+    store.add_edge(src=b, dst=a, rel="改变", conf=0.9, decided_by="jev",
+                   probs={"改变": 0.6}, backend="lev-4b")
+    store.add_edge(src=b, dst=a, rel="否定", conf=0.5, decided_by="jev")  # 默认空串
+
+    into = {edge["rel"]: edge for edge in store.edges_into(a)}
+    assert into["改变"]["backend"] == "lev-4b"
+    assert into["否定"]["backend"] == "", "旧调用不写 backend，也不是 NULL"
+    out = {edge["rel"]: edge for edge in store.edges_from(b)}
+    assert out["改变"]["backend"] == "lev-4b"
+
 
 @case
 def test_session_project(store: Store) -> None:
@@ -630,7 +649,7 @@ def test_advance_meta_ts_is_a_high_water_mark(store: Store) -> None:
 
 @case
 def test_schema_pragmas_and_idempotence(store: Store) -> None:
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION == 8
 
     conn = raw(store)
     try:

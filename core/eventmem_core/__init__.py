@@ -8,8 +8,10 @@ Public surface, and the whole of it:
 * :func:`apply` — overlay a plain mapping (a host's config section) onto those defaults.
 
 Modules under this package are implementation: ``store`` (SQLite), ``recall``
-(fusion + rendering), ``embed`` (ONNX encoder), ``jev`` (decision-model client),
-``nightly`` (edge building), ``worker`` (the resident pass), ``i18n`` (render language).
+(fusion + rendering), ``embed`` (ONNX encoder), ``jev`` (the decision-model client the
+edge builder speaks today), ``providers`` (the two wire formats: System One and OpenAI
+Decisions), ``packs`` (one folder = one decision backend), ``nightly`` (edge building),
+``worker`` (the resident pass), ``i18n`` (render language).
 None of them import a host.  If something needs a host, it belongs in an adapter.
 """
 

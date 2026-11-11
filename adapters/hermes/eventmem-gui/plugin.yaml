@@ -1,0 +1,9 @@
+name: eventmem-gui
+version: 0.3.0
+description: >-
+  eventmem daemon 的管理台（默认 127.0.0.1:9123）原样代理到
+  /api/plugins/eventmem-gui/。桌面端经 SSH 连远端 backend 时，浏览器打不开对端
+  的 loopback，这个代理让 GUI 跟着 dashboard 走，不需要额外隧道。
+tags:
+  - memory
+  - admin

@@ -78,6 +78,15 @@ class DecisionPolicy:
     think_mode: str = ""
     #: Optional start script for the service, used by the resident worker.
     start_script: str = ""
+    #: Ordered backend pack names under ``packs_dir``.  Empty = the single ``url`` above,
+    #: which is exactly what v2.1 did.  The chain is probed once per pass: the first live
+    #: pack answers the whole pass, and a mid-pass failure aborts instead of switching
+    #: models (two models give two distributions; mixed edges cannot be recalibrated).
+    backends: tuple[str, ...] = ()
+    #: Directory of backend packs; empty = "the adapter did not say".
+    packs_dir: str = ""
+    #: Liveness probe timeout.  A probe costs one HTTP GET and no tokens.
+    probe_timeout: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -204,6 +213,13 @@ def _validate(policy: Any, name: str, warn) -> None:
         if bad:
             warn(f"{name}.neighbour_rels 含非法 rel {bad}；用默认值")
             return False
+    if isinstance(policy, DecisionPolicy):
+        if policy.timeout <= 0 or policy.probe_timeout <= 0:
+            warn(f"{name}: timeout/probe_timeout 必须 > 0；用默认值")
+            return False
+        if any(not str(name).strip() for name in policy.backends):
+            warn(f"{name}.backends 里有空名字；用默认值")
+            return False
     return True
 
 
@@ -235,17 +251,26 @@ def _split(path: str) -> tuple[Optional[str], str]:
     return None, path
 
 
-def apply(base: CoreSettings, mapping: Mapping[str, Any], *, warn=None) -> CoreSettings:
+def apply(base: CoreSettings, mapping: Mapping[str, Any], *, warn=None,
+          strict: bool = False) -> CoreSettings:
     """Return ``base`` with every recognised key from *mapping* applied.
 
     Unknown keys and values that fail to coerce are reported through *warn* (a callable
     taking one string) and left at their previous value — a typo in a config file must
     never take the memory down.  Returns a new :class:`CoreSettings`; *base* is untouched.
+
+    *strict* turns the first complaint into a :class:`ValueError` instead of a warning.
+    The GUI writes with ``strict=True`` so a rejected value is never persisted; the read
+    paths stay lenient.
     """
     if not mapping:
         return base
-    warnings: list[str] = []
-    emit = warn or warnings.append
+    problems: list[str] = []
+
+    def emit(message: str) -> None:
+        problems.append(message)
+        if warn is not None:
+            warn(message)
 
     top: dict[str, Any] = {}
     policies: dict[str, dict[str, Any]] = {name: {} for name in _POLICY_FIELDS}
@@ -290,6 +315,8 @@ def apply(base: CoreSettings, mapping: Mapping[str, Any], *, warn=None) -> CoreS
             emit(f"{key}={value!r} 无法解析（{exc}）；用默认值")
 
 
+    if strict and problems:
+        raise ValueError(problems[0])
     if not replaced and not top_changes:
         return base
     return _replace(base, **{**top_changes, **replaced})

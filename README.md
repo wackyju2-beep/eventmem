@@ -12,7 +12,7 @@ sure the judge was.
 One SQLite file, no API key, no GPU: append-only events, five typed directed relations, and a 4B judge running
 on the CPU.
 
-<sub>v0.2.1 · schema v7 · 237 checks</sub>
+<sub>v0.3.0 · schema v8 · 343 checks</sub>
 
 I wrote it for my own agent, on a mini PC with no graphics card. The problem was concrete: chunk memory kept
 handing me paragraphs where half the sentences had already been replaced by something newer, and nothing in the
@@ -134,7 +134,8 @@ And the honest limit: the Instant model is weaker than its thinking sibling on p
 The rule for the boundary is one question: *if I change the host, does this code still hold?* If yes, it is core.
 
 ```
-core/eventmem_core/          schema · store · recall · embed · edges · worker · i18n
+core/eventmem_core/          schema · store · recall · embed · edges · packs · decision
+                             runtime · daemon · install · worker · ui · i18n
 adapters/hermes/             everything that knows about Hermes
   eventmem/                  memory provider: tools, middleware, end-of-turn extraction, settings
   eventmem-graph/            dashboard backend for the 3D graph
@@ -206,8 +207,52 @@ hermes plugins enable eventmem-graph   # only for the graph
 ```
 
 It takes effect in a new session. The database is created on first write at `~/.hermes/eventmem/events.db`
-(schema v7). All thresholds live under `plugins.entries.eventmem.settings`; defaults and meanings are in
+(schema v8). All thresholds live under `plugins.entries.eventmem.settings`; defaults and meanings are in
 [`docs/settings.md`](docs/settings.md).
+
+### The judge is a folder (v0.3)
+
+Which model decides the relations is not a plugin setting any more: it is a directory.
+
+```
+~/.hermes/eventmem/backends/lev/config.yaml
+```
+
+Three shapes, decided by which keys are in that file: `weights:` (eventmem launches `llama-server`
+itself), `base_url:` + `external: true` (something else runs it — LM Studio, a systemd unit), or
+`base_url:` alone (hosted). Dropping the folder in **is** the install. The full key list, the
+fallback rules and the failure table are in [`docs/backends.md`](docs/backends.md); copyable starters
+are in [`examples/backends/`](examples/backends/).
+
+One command for the self-managed path — it picks the `llama.cpp` build for this machine, fetches the
+GGUF, verifies the sha256 and writes the pack:
+
+```bash
+PY=~/.hermes/hermes-agent/.venv/bin/python
+$PY ~/eventmem/adapters/hermes/run.py models install lev
+```
+
+Then the chain, in `~/.hermes/eventmem/settings.yaml` (GUI and hand edits are the same file):
+
+```yaml
+decision:
+  backends: [typesafe, lev]      # first one that answers runs the whole pass
+```
+
+`typesafe` with no key is not an error: the probe says `needs_key`, the chain moves to `lev`, and each
+edge records which backend wrote it (`edges.backend`). Empty chain = the single endpoint at
+`decision.url`, i.e. exactly v0.2 behaviour.
+
+`run.py daemon` is the resident process behind all of this: it polls, starts self-managed packs only
+when a pass has work, and serves a small GUI at **http://127.0.0.1:9123/** (overview, backends, models,
+schedule, logs) that is a thin client of the same JSON routes.
+
+That address only exists on the machine running the daemon — which is exactly wrong when the desktop
+app is connected to a *remote* backend. So the adapter also ships `eventmem-gui`, a dashboard plugin
+that re-exports the whole console under the dashboard's own origin (`/api/plugins/eventmem-gui/`,
+behind the dashboard's auth). In the app it is the **记忆后台** chip in the status bar; from a browser
+it is the same URL on the dashboard's host, with no tunnel to remember. `EVENTMEM_DAEMON_URL` moves the
+proxy's target when the daemon lives somewhere else.
 
 Vector arm (optional): `pip install onnxruntime tokenizers numpy`, then drop a Qwen3-Embedding-0.6B ONNX
 (512-dim, int8) into `~/localmem/models/`. Missing anything just means FTS-only, silently.
@@ -228,7 +273,8 @@ The model calls these; you normally don't.
 Every turn the model also gets one line with the existing projects ranked by relevance to the turn, so it knows
 what to reuse before it invents a new name.
 
-The graph lives in the desktop app: the `记忆图谱` chip in the status bar, or the `/eventmem-graph` route.
+The graph lives in the desktop app as the **图谱** tab of **记忆后台** (`eventmem-graph` has no chip and no
+route of its own any more — it only hands its 3D view to the console).
 
 | action | result |
 |---|---|
@@ -249,26 +295,31 @@ Plain scripts, no pytest:
 
 ```bash
 cd ~/eventmem
-for t in store recall nightly worker i18n plugin settings hermes_settings; do
+for t in store recall nightly worker i18n plugin settings hermes_settings \
+         packs decision daemon install ui gui_proxy; do
   python3 tests/test_$t.py | tail -1
 done
 ```
 
 ```
-store            PASS 31
-recall           PASS 33
-nightly          PASS 93
-worker           PASS 3
-i18n             PASS 10
-plugin           PASS 43
-settings         PASS 14
-hermes_settings  PASS 10
+store            PASS 32      packs            PASS 27
+recall           PASS 33      decision         PASS 21
+nightly          PASS 93      daemon           PASS 16
+worker           PASS 3       install          PASS 19
+i18n             PASS 10      ui               PASS 15
+plugin           PASS 43      gui_proxy        PASS 7
+settings         PASS 14      ──────────────────────────
+hermes_settings  PASS 10      343
 ```
 
-237 checks. Each case gets its own temporary database, and nothing touches `~/.hermes`. Recall tests use a
+343 checks. Each case gets its own temporary database, and nothing touches `~/.hermes`. Recall tests use a
 `FakeEncoder`, so they pass without numpy or onnxruntime. `test_plugin.py` needs the host's
 `agent.memory_provider`; on a bare machine (CI) `tests/_host_stub.py` substitutes a minimal stub, which is why
 the suite is green on 3.11 and 3.12 in Actions too.
+
+The v0.3 suites are mostly end-to-end on purpose: `test_daemon` starts real subprocesses, `test_install`
+serves the release and the model over a local HTTP server (including `Range` resume), and `test_ui` drives the
+daemon over real HTTP — the GUI has no other client, so the routes *are* the contract.
 
 ## Known limitations
 
@@ -282,6 +333,8 @@ the suite is green on 3.11 and 3.12 in Actions too.
 - The graph UI and the stored kind/relation names are Chinese. Model-facing text is bilingual.
 - This is a personal project, not a product: no hosted service, no support, and no promise that the schema
   stays put between versions.
+- The daemon and its GUI are **one process per database, bound to loopback, no auth**. It is a local admin
+  panel; do not put it on a network you do not trust.
 
 ## License
 

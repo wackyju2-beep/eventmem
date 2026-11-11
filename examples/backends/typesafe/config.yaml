@@ -1,0 +1,8 @@
+# The hosted judge. Without a key the chain skips it (probe -> needs_key), which is exactly
+# what makes "hosted first, local fallback" safe to configure before you have access.
+protocol: systemone
+model: jev-latest
+base_url: https://api.typesafe.ai
+api_key_env: TYPESAFE_API_KEY
+license: proprietary
+note: 官方托管；价格与 waitlist 见 docs/decision-backends
