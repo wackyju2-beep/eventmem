@@ -16,9 +16,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # The suite is plain scripts (no pytest) and needs no dependencies: without
-      # numpy/onnxruntime the encoder degrades to FTS and the fakes cover the rest.
-      # tests/_host_stub.py supplies the three host names the adapter imports.
+      # The suite is plain scripts (no pytest).  numpy/onnxruntime are optional: the
+      # encoder degrades to FTS and the fakes cover the rest, so don't install them.
+      # tests/_host_stub.py supplies the host names the adapter imports.
+      #
+      # PyYAML is the one real dependency.  Turning config.yaml into CoreSettings is
+      # the adapter's whole job (tests/test_hermes_settings.py), and with no parser
+      # every override silently falls back to the core defaults.
+      - name: install PyYAML
+        run: python3 -m pip install --disable-pip-version-check pyyaml
       - name: run all test scripts
         run: |
           set -e
