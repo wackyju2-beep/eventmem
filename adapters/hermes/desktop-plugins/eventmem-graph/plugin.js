@@ -62,42 +62,48 @@ const CSS = `
 .em-edge-back{z-index:1}
 .em-edges-front{z-index:25000}
 .em-atom-layer{position:absolute;inset:0;pointer-events:none}
-.em-atom{position:absolute;left:0;top:0;width:116px;box-sizing:border-box;padding:4px 6px 5px;border-radius:6px;
-  pointer-events:auto;cursor:pointer;user-select:none;overflow:hidden;
-  background:color-mix(in srgb,var(--ui-bg-card) 86%,var(--ui-bg-primary));
-  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 74%,transparent);
+/* An atom is two layers: far away only a numbered ball, close up a rounded card fades in
+   over it. Both live in one wrapper and cross-fade by opacity, so the morph is continuous
+   instead of snapping between layouts. The card background is opaque — the text needs it,
+   and it drops an alpha blend out of every frame. */
+.em-atom{position:absolute;left:0;top:0;width:176px;height:56px;pointer-events:none;
+  user-select:none;will-change:transform}
+.em-atom-card{position:absolute;inset:0;box-sizing:border-box;padding:5px 9px;border-radius:9px;
+  overflow:hidden;pointer-events:auto;cursor:pointer;background:var(--ui-bg-card);
+  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 72%,transparent);
   border-left:3px solid var(--ui-stroke-secondary);
-  box-shadow:0 7px 20px color-mix(in srgb,var(--ui-base) 34%,transparent);
-  transition:opacity .18s ease,filter .18s ease;will-change:transform,opacity}
-.em-atom[data-kind="决定"]{border-left-color:#6aa9ff}
-.em-atom[data-kind="尝试"]{border-left-color:#3ad6c4}
-.em-atom[data-kind="结果"]{border-left-color:#48c979}
-.em-atom[data-kind="变更"]{border-left-color:#f2a93b}
-.em-atom[data-kind="教训"]{border-left-color:#ff6f8e}
-.em-atom:hover{z-index:30000!important;box-shadow:0 10px 28px color-mix(in srgb,var(--ui-base) 46%,transparent)}
-.em-atom[data-state="promo"]{filter:grayscale(.9)}
-.em-atom[data-state="promo"] .em-atom-text{color:var(--ui-text-tertiary)}
-.em-atom[data-state="out"]{filter:grayscale(1)}
-.em-atom[data-state="out"] .em-atom-text{color:var(--ui-text-quaternary)}
-.em-atom[data-selected="1"]{box-shadow:0 0 0 2px var(--ui-accent),0 12px 30px color-mix(in srgb,var(--ui-base) 50%,transparent)}
-.em-atom[data-edited="1"]::after{content:'';position:absolute;inset:-1px;border-radius:8px;padding:2px;pointer-events:none;
+  box-shadow:0 3px 10px color-mix(in srgb,var(--ui-base) 26%,transparent)}
+.em-atom-dot{position:absolute;left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;
+  border-radius:50%;display:grid;place-items:center;pointer-events:auto;cursor:pointer;
+  background:var(--ui-bg-card);border:1px solid var(--ui-stroke-secondary);
+  font:700 9px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
+  box-shadow:0 2px 6px color-mix(in srgb,var(--ui-base) 34%,transparent)}
+.em-atom[data-kind="决定"] .em-atom-card{border-left-color:#6aa9ff}
+.em-atom[data-kind="尝试"] .em-atom-card{border-left-color:#3ad6c4}
+.em-atom[data-kind="结果"] .em-atom-card{border-left-color:#48c979}
+.em-atom[data-kind="变更"] .em-atom-card{border-left-color:#f2a93b}
+.em-atom[data-kind="教训"] .em-atom-card{border-left-color:#ff6f8e}
+.em-atom[data-kind="决定"] .em-atom-dot{border-color:#6aa9ff;color:#8dbeff}
+.em-atom[data-kind="尝试"] .em-atom-dot{border-color:#3ad6c4;color:#6ce4d6}
+.em-atom[data-kind="结果"] .em-atom-dot{border-color:#48c979;color:#74d99b}
+.em-atom[data-kind="变更"] .em-atom-dot{border-color:#f2a93b;color:#f6c06d}
+.em-atom[data-kind="教训"] .em-atom-dot{border-color:#ff6f8e;color:#ff9db2}
+.em-atom[data-mode="dot"] .em-atom-card{pointer-events:none}
+.em-atom[data-mode="card"] .em-atom-dot{pointer-events:none}
+.em-atom:hover .em-atom-card{box-shadow:0 6px 18px color-mix(in srgb,var(--ui-base) 42%,transparent);
+  border-color:color-mix(in srgb,var(--ui-accent) 45%,var(--ui-stroke-secondary))}
+.em-atom[data-selected="1"] .em-atom-card{box-shadow:0 0 0 2px var(--ui-accent),0 8px 22px color-mix(in srgb,var(--ui-base) 46%,transparent)}
+.em-atom[data-edited="1"] .em-atom-card::after{content:'';position:absolute;inset:-1px;border-radius:10px;padding:2px;pointer-events:none;
   background:conic-gradient(from 0deg,#ff5f6d,#ffc371,#a8e063,#56ccf2,#9b73ff,#ff5f6d);
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude;animation:em-hue 7s linear infinite}
-.em-atom-head{display:flex;align-items:center;gap:4px;font-size:8.5px;line-height:1.25}
+.em-atom-head{display:flex;align-items:center;gap:5px;font-size:8.5px;line-height:1.2}
 .em-atom-id{font-family:var(--font-mono,ui-monospace,monospace);font-weight:700;color:var(--ui-text-primary)}
 .em-atom-kind{font-weight:600}
 .em-atom-time{margin-left:auto;color:var(--ui-text-quaternary);font-variant-numeric:tabular-nums;white-space:nowrap}
-.em-atom-text{margin-top:2px;font-size:8.5px;line-height:1.3;color:var(--ui-text-secondary);word-break:break-word;
-  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.em-atom-edited{position:absolute;right:4px;bottom:2px;font-size:9px;color:var(--ui-accent);opacity:.9}
-.em-atom[data-clickable="0"]{cursor:default}
-.em-atom[data-compact="1"]{width:88px;padding:2px 5px;border-radius:5px}
-.em-atom[data-compact="1"] .em-atom-text,.em-atom[data-compact="1"] .em-atom-time{display:none}
-.em-atom[data-compact="1"] .em-atom-head{font-size:8px}
-.em-atom[data-focus="1"]{box-shadow:0 0 0 1.5px var(--ui-accent),0 24px 60px color-mix(in srgb,var(--ui-base) 62%,transparent);background:color-mix(in srgb,var(--ui-bg-card) 96%,var(--ui-bg-primary))}
-.em-atom[data-focus="1"] .em-atom-text{-webkit-line-clamp:8;color:var(--ui-text-primary);font-size:9px}
-.em-atom[data-focus="1"] .em-atom-time{color:var(--ui-text-tertiary)}
+.em-atom-text{margin-top:3px;font-size:9px;line-height:1.35;color:var(--ui-text-secondary);word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.em-atom-edited{position:absolute;right:5px;bottom:3px;font-size:9px;color:var(--ui-accent);opacity:.9}
 @keyframes em-hue{to{filter:hue-rotate(360deg)}}
 .em-bar{position:absolute;left:10px;right:10px;top:10px;z-index:40000;display:flex;flex-wrap:wrap;align-items:center;gap:6px;
   padding:6px 8px;border-radius:9px;pointer-events:auto;
@@ -189,10 +195,16 @@ const CSS = `
 // --------------------------------------------------------------------------- helpers
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+const smoothstep = (e0, e1, x) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1)
+  return t * t * (3 - 2 * t)
+}
 
 // 世界单位只由相机距离定义：START_DIST 是默认视距，FOCUS_DIST 是"拉到眼前"后的视距。
 const START_DIST = 3.5
 const FOCUS_DIST = 2.4
+// 卡片“满尺寸”的距离：k/线宽/字号都以它归一，和开场视距解耦。
+const SCALE_REF = 2.4
 const PULL_IN = 0.7
 const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
 
@@ -426,6 +438,8 @@ function Scene({
   const backRef = useRef(null)
   const frontRef = useRef(null)
   const haloRef = useRef('#0f1115')
+  // 选中时只留焦点邻域，其余原子整个收起来；按 (选择, 过滤器, 场景) 身份缓存。
+  const visRef = useRef({ key: '', fi: null, scene: null, set: null })
   const hitRef = useRef([])
   const dragRef = useRef(null)
   const movedRef = useRef(0)
@@ -474,7 +488,8 @@ function Scene({
       if (!cam.ready) {
         cam.ready = true
         cam.startDist = START_DIST
-        cam.dist = START_DIST
+        // 开局先看全貌：整个云团缩成一屏编号小球，点了再飞进去。
+        cam.dist = Math.max(START_DIST, cam.fit)
         const seed = scene.byId.get(scene.newestId)
         cam.fx = seed ? seed.x : 0
         cam.fy = seed ? seed.y : 0
@@ -542,29 +557,22 @@ function Scene({
       if (!w || !h) return
       const b = cameraBasis(cam)
       const focal = h / 2 / Math.tan(FOV / 2)
-      const startDist = cam.startDist || START_DIST
+      const startDist = SCALE_REF
       const fi = focusRef.current
       const active = fi.active
-      const push = startDist * 0.55
       const selNow = selRef.current
       const panX = cam.panX || 0
       const panY = cam.panY || 0
 
-      let focusIds = []
-      if (selNow) {
-        if (selNow.type === 'atom') focusIds = [selNow.id]
-        else {
-          const e = scene.edges.find(x => x.key === selNow.key)
-          if (e) focusIds = [e.src, e.dst]
-        }
-      }
 
-      const project = (atom, pushed) => {
+      const project = atom => {
         const vx = atom.x - b.ex
         const vy = atom.y - b.ey
         const vz = atom.z - b.ez
-        const zc = vx * b.fx + vy * b.fy + vz * b.fz + (pushed ? push : 0)
-        if (zc <= 0.05) return null
+        // Clamp at the near plane instead of returning null: a point that slides behind the
+        // camera then projects far off-screen, so the edge to it exits the view smoothly
+        // instead of the whole edge vanishing and reappearing while the camera orbits.
+        const zc = Math.max(vx * b.fx + vy * b.fy + vz * b.fz, 0.35)
         const xc = vx * b.rx + vz * b.rz
         const yc = vx * b.ux + vy * b.uy + vz * b.uz
         const unit = focal / zc
@@ -577,36 +585,73 @@ function Scene({
         }
       }
 
+      // ---- which atoms are on stage -----------------------------------------
+      // 选中一个原子/一条边时只留焦点邻域；筛选器生效时只留命中的；其余隐藏。
+      const vis = visRef.current
+      const wantKey = selNow ? (selNow.type === 'atom' ? `a:${selNow.id}` : `e:${selNow.key}`) : active ? 'filter' : 'all'
+      if (vis.key !== wantKey || vis.fi !== fi || vis.scene !== scene) {
+        vis.key = wantKey
+        vis.fi = fi
+        vis.scene = scene
+        if (wantKey === 'all') vis.set = null
+        else if (wantKey === 'filter') vis.set = new Set(fi.focus)
+        else {
+          const set = new Set()
+          if (selNow.type === 'atom') {
+            set.add(selNow.id)
+            for (const e of scene.edges) {
+              if (e.src === selNow.id) set.add(e.dst)
+              else if (e.dst === selNow.id) set.add(e.src)
+            }
+          } else {
+            const found = scene.edges.find(x => x.key === selNow.key)
+            if (found) {
+              set.add(found.src)
+              set.add(found.dst)
+            }
+          }
+          vis.set = set
+        }
+      }
+      const shown = vis.set
+
       const positions = new Map()
       for (const atom of scene.atoms) {
-        const state = !active ? 'in' : fi.match.has(atom.id) ? 'in' : fi.focus.has(atom.id) ? 'promo' : 'out'
-        const p = project(atom, state === 'out')
-        if (!p) {
+        const el = atomEls.current.get(atom.id)
+        if (shown && !shown.has(atom.id)) {
           positions.set(atom.id, null)
-          const el0 = atomEls.current.get(atom.id)
-          if (el0) el0.style.display = 'none'
+          if (el) el.style.display = 'none'
           continue
         }
-        positions.set(atom.id, { ...p, state })
-        const el = atomEls.current.get(atom.id)
+        const p = project(atom)
+        if (p.x < -4000 || p.x > w + 4000 || p.y < -4000 || p.y > h + 4000) {
+          positions.set(atom.id, null)
+          if (el) el.style.display = 'none'
+          continue
+        }
+        // 缩放到小球与卡片之间交叉淡出：s 是连续量，所以“球→圆角矩形→展开”没有档位跳变。
+        const s = clamp(p.k, 0.26, 1.06)
+        const cardIn = smoothstep(0.46, 0.66, s)
+        const mode = s < 0.56 ? 'dot' : 'card'
+        const isSelAtom = selNow && selNow.type === 'atom' && selNow.id === atom.id
+        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, s, mode })
         if (!el) continue
         el.style.display = ''
-        const isSel = focusIds.includes(atom.id)
-        el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%) scale(${p.k.toFixed(3)})`
-        el.dataset.compact = p.k < 0.55 ? '1' : '0'
-        el.dataset.focus = isSel ? '1' : '0'
-        el.dataset.state = state
-        el.dataset.selected = isSel ? '1' : '0'
-        // 筛选时被排除在外的原子不响应点击（点它只等于点空白）
-        el.dataset.clickable = !active || fi.focus.has(atom.id) ? '1' : '0'
-        el.style.opacity =
-          state === 'out'
-            ? '0.2'
-            : state === 'promo'
-              ? '0.5'
-              : String(clamp(1.25 - (p.z / (startDist * 2.2)) * 0.5, 0.45, 1))
-        // 选中层压在所有边/标签之上（SVG 是 25000）。
-        el.style.zIndex = isSel ? '34000' : String(Math.round(20000 - p.z * 100))
+        if (el.dataset.mode !== mode) el.dataset.mode = mode
+        el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%) scale(${s.toFixed(3)})`
+        el.dataset.selected = isSelAtom ? '1' : '0'
+        // 选中层压在所有边/标签之上（canvas 前层是 25000）。
+        el.style.zIndex = isSelAtom ? '34000' : String(Math.round(20000 - p.z * 100))
+        const dot = el.children[0]
+        const card = el.children[1]
+        // 小球反向缩放，远处也保持能看清的直径。
+        if (dot) {
+          // Partial counter-scale (exponent < 1): a far ball shrinks with distance instead of
+          // staying 20px and turning the cloud into a wall of overlapping numbers.
+          dot.style.opacity = (1 - cardIn).toFixed(3)
+          dot.style.transform = `scale(${Math.min(1.9, (1 / Math.max(s, 0.18)) ** 0.55).toFixed(2)})`
+        }
+        if (card) card.style.opacity = cardIn.toFixed(3)
       }
 
       // ---- edges, on canvas -------------------------------------------------
@@ -629,17 +674,26 @@ function Scene({
       const back = prep(backRef.current)
       const front = prep(frontRef.current)
 
+      // 连线从卡片/小球的边缘出发，不从中心穿过去。
+      const CARD_W = 176
+      const CARD_H = 56
+      const DOT_R = 10
+      const anchorOn = (p, dirX, dirY) => {
+        if (p.mode === 'dot') return { x: p.x + dirX * DOT_R, y: p.y + dirY * DOT_R }
+        const hw = (CARD_W * p.s) / 2
+        const hh = (CARD_H * p.s) / 2
+        const ax = Math.abs(dirX) || 1e-6
+        const ay = Math.abs(dirY) || 1e-6
+        const t = Math.min(hw / ax, hh / ay)
+        return { x: p.x + dirX * t, y: p.y + dirY * t }
+      }
+
       const screenEdges = []
       const selKey = selNow && selNow.type === 'edge' ? selNow.key : null
-      const selAtom = selNow && selNow.type === 'atom' ? selNow.id : null
       const labelsOn = labelsRef.current
-      // LOD by zoom (cam.dist relative to the distance that fits the whole graph), not by
-      // raw depth: when the camera pulls back the edges would stack into a sub-pixel haze,
-      // so draw a stable subset instead — half, then a quarter — with a higher alpha floor
-      // and a 1px minimum so the shape of the graph still reads.
       const zoomOut = cam.dist / (cam.fit || cam.dist)
-      const coarse = zoomOut > 1.9
-      const midCoarse = !coarse && zoomOut > 1.15
+      const coarse = zoomOut > 1.6
+      const midCoarse = !coarse && zoomOut > 0.95
       const sampleEdge = (e, n) => (e.key.length + e.key.charCodeAt(0) + e.key.charCodeAt(e.key.length - 1)) % n === 0
       const buckets = new Map()
       const labels = []
@@ -650,38 +704,37 @@ function Scene({
         const c = positions.get(edge.dst)
         if (!a || !c) continue
         const isSel = selKey === edge.key
-        const offP = p => p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80
-        if (!isSel && offP(a) && offP(c)) continue
         if (!isSel && coarse && !sampleEdge(edge, 4)) continue
         if (!isSel && midCoarse && !sampleEdge(edge, 2)) continue
-        const inA = a.state !== 'out'
-        const inB = c.state !== 'out'
-        const cls = !active ? 'in' : inA && inB ? 'in' : inA || inB ? 'cross' : 'out'
-        const color = edge.edited ? EDITED_COLOR : edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR
-        const crossFade = edge.cross ? 0.45 : 1
-        const depthFade = clamp(1.45 - Math.max(a.z, c.z) / (startDist * 1.85), 0.16, 1)
-        const far = coarse || midCoarse
-        const baseOpacity = far
-          ? Math.max((cls === 'out' ? 0.05 : cls === 'cross' ? 0.13 : 0.2) * crossFade, coarse ? 0.14 : 0.1)
-          : (cls === 'out' ? 0.04 : cls === 'cross' ? 0.12 : 0.22) * crossFade * depthFade
-        const k = clamp(startDist / Math.min(a.z, c.z), 0.45, 1.65)
-        const width = far
-          ? Math.max(0.9, 1.15 * (edge.cross ? 0.8 : 1) * k)
-          : 1.15 * (edge.cross ? 0.8 : 1) * k
+        const offP = p => p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80
+        if (!isSel && offP(a) && offP(c)) continue
 
         const dx = c.x - a.x
         const dy = c.y - a.y
         const len = Math.hypot(dx, dy) || 1
         const bow = isSel ? 0.1 : edge.bow || 0.16
-        const cx = (a.x + c.x) / 2 + (-dy / len) * bow * len
-        const cy = (a.y + c.y) / 2 + (dx / len) * bow * len
-        // 筛选时两头都被排除的边不响应点击
-        if (!active || fi.focus.has(edge.src) || fi.focus.has(edge.dst)) {
-          screenEdges.push({ key: edge.key, edge, x1: a.x, y1: a.y, x2: c.x, y2: c.y, cx, cy })
-        }
+        const ctlX = (a.x + c.x) / 2 + (-dy / len) * bow * len
+        const ctlY = (a.y + c.y) / 2 + (dx / len) * bow * len
+        // 两端各自朝控制点方向裁到盒子上：连线贴着卡片边缘，而不是从卡片中心穿出来。
+        const la = Math.hypot(ctlX - a.x, ctlY - a.y) || 1
+        const lc = Math.hypot(ctlX - c.x, ctlY - c.y) || 1
+        const A = anchorOn(a, (ctlX - a.x) / la, (ctlY - a.y) / la)
+        const C = anchorOn(c, (ctlX - c.x) / lc, (ctlY - c.y) / lc)
+
+        const color = edge.edited ? EDITED_COLOR : edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR
+        const crossFade = edge.cross ? 0.45 : 1
+        const depthFade = clamp(1.45 - Math.max(a.z, c.z) / (startDist * 1.85), 0.16, 1)
+        const far = coarse || midCoarse
+        const k = clamp(startDist / Math.min(a.z, c.z), 0.45, 1.65)
+        const width = far ? Math.max(0.9, 1.15 * (edge.cross ? 0.8 : 1) * k) : 1.15 * (edge.cross ? 0.8 : 1) * k
+        const baseOpacity = far
+          ? Math.max(0.2 * crossFade, coarse ? 0.14 : 0.1)
+          : 0.22 * crossFade * depthFade
+
+        screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
 
         if (isSel) {
-          selEdge = { color, x1: a.x, y1: a.y, cx, cy, x2: c.x, y2: c.y, width }
+          selEdge = { color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width }
         } else if (back) {
           const op = Math.round(baseOpacity * 100) / 100
           const wd = Math.round(width * 2) / 2
@@ -691,20 +744,20 @@ function Scene({
             bucket = { color, op, wd, path: new Path2D() }
             buckets.set(bucketKey, bucket)
           }
-          bucket.path.moveTo(a.x, a.y)
-          bucket.path.quadraticCurveTo(cx, cy, c.x, c.y)
+          bucket.path.moveTo(A.x, A.y)
+          bucket.path.quadraticCurveTo(ctlX, ctlY, C.x, C.y)
         }
 
-        const incident = selAtom != null && (edge.src === selAtom || edge.dst === selAtom)
-        const visible = isSel || (incident && len < 420) || (labelsOn && cls === 'in' && len > 120)
+        const incident = selNow && selNow.type === 'atom' && (edge.src === selNow.id || edge.dst === selNow.id)
+        const visible = isSel || (incident && len < 460) || (labelsOn && len > 120)
         if (!visible) continue
         labels.push({
           text: edge.kind === 'none' ? '无' : edge.rel,
           color,
-          x: 0.25 * a.x + 0.5 * cx + 0.25 * c.x,
-          y: 0.25 * a.y + 0.5 * cy + 0.25 * c.y,
+          x: 0.25 * A.x + 0.5 * ctlX + 0.25 * C.x,
+          y: 0.25 * A.y + 0.5 * ctlY + 0.25 * C.y,
           size: 11 * k,
-          alpha: isSel ? 1 : cls === 'cross' ? 0.55 : 0.85,
+          alpha: isSel ? 1 : 0.85,
           selected: isSel
         })
       }
@@ -741,7 +794,7 @@ function Scene({
         front.lineJoin = 'round'
         for (const lb of labels) {
           front.font = `600 ${lb.size.toFixed(1)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
-          front.globalAlpha = lb.selected ? 1 : 0.9
+          front.globalAlpha = 0.9
           front.lineWidth = 3
           front.strokeStyle = halo
           front.strokeText(lb.text, lb.x, lb.y - 6)
@@ -937,38 +990,36 @@ function Scene({
             className: 'em-atom',
             'data-id': a.id,
             'data-kind': a.kind,
-            'data-state': 'in',
+            'data-mode': 'card',
             'data-selected': '0',
-            'data-compact': '0',
-            'data-focus': '0',
             'data-edited': a.edited_ts ? '1' : '0',
             title: `${a.text}\n\n${fmtFull(a.ts)} · ${a.project || '未归类'}`,
             onClick: e => {
               e.stopPropagation()
               if (movedRef.current > 5) return
-              if (e.currentTarget.dataset.clickable === '0') {
-                handlersRef.current.onBackground()
-                return
-              }
               handlersRef.current.onSelectAtom(a.id)
             },
             children: [
+              jsx('div', { className: 'em-atom-dot', children: `#${a.id}` }),
               jsxs('div', {
-                className: 'em-atom-head',
+                className: 'em-atom-card',
                 children: [
-                  jsx('span', { className: 'em-atom-id', children: `#${a.id}` }),
-                  jsx('span', {
-                    className: 'em-atom-kind',
-                    style: { color: KIND_COLORS[a.kind] || 'var(--ui-text-secondary)' },
-                    children: a.kind
+                  jsxs('div', {
+                    className: 'em-atom-head',
+                    children: [
+                      jsx('span', { className: 'em-atom-id', children: `#${a.id}` }),
+                      jsx('span', {
+                        className: 'em-atom-kind',
+                        style: { color: KIND_COLORS[a.kind] || 'var(--ui-text-secondary)' },
+                        children: a.kind
+                      }),
+                      jsx('span', { className: 'em-atom-time', children: fmtTime(a.ts) })
+                    ]
                   }),
-                  jsx('span', { className: 'em-atom-time', children: fmtTime(a.ts) })
+                  jsx('div', { className: 'em-atom-text', children: a.text }),
+                  a.edited_ts ? jsx('span', { className: 'em-atom-edited', title: '人工改过', children: '✎' }) : null
                 ]
-              }),
-              jsx('div', { className: 'em-atom-text', children: a.text }),
-              a.edited_ts
-                ? jsx('span', { className: 'em-atom-edited', title: '人工改过', children: '✎' })
-                : null
+              })
             ]
           },
           a.id
