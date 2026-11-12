@@ -84,7 +84,10 @@ const CSS = `
   background:var(--ui-bg-card)}
 .emg-card + .emg-card{margin-top:12px}
 .emg-card h3{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ui-text-secondary);letter-spacing:.02em}
-.emg-grid{display:grid;gap:12px}
+/* The card+card rule gives stacked cards a top margin; inside a grid that margin
+   shrinks the second card by the same amount and leaves the two bottoms uneven. */
+.emg-grid{display:grid;gap:12px;align-items:stretch}
+.emg-grid > .emg-card{margin-top:0}
 .emg-grid.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .emg-grid.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .emg-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px}

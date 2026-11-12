@@ -39,6 +39,8 @@ const REL_COLORS = {
   细化: '#54a8ff'
 }
 const NONE_COLOR = '#8b93a3'
+// 人工改过的边原来吃 SVG 的 linearGradient；canvas 里一个纯色更省，也更清楚。
+const EDITED_COLOR = '#c58bff'
 const KINDS = ['决定', '尝试', '结果', '变更', '教训']
 const RELS = ['改变', '否定', '重复', '因为', '细化']
 const AXIS_LABELS = ['重复', '改变', '否定', '都不是']
@@ -53,10 +55,12 @@ const CSS = `
   background:radial-gradient(circle at 50% 42%,color-mix(in srgb,var(--ui-accent) 8%,transparent),transparent 64%),
              radial-gradient(circle at 50% 50%,transparent 38%,color-mix(in srgb,var(--ui-bg-primary) 62%,transparent) 100%)}
 .em-stage:active{cursor:grabbing}
-.em-edges{position:absolute;inset:0;overflow:visible;pointer-events:none}
+/* Edges live on two canvases: a back one under the atom cards, a front one for the
+   selected edge and the labels. Drawing 2k+ edges as <path> elements meant ~13k
+   attribute writes per frame and dropped the whole window to single-digit fps. */
+.em-edges{position:absolute;inset:0;pointer-events:none;width:100%;height:100%}
+.em-edge-back{z-index:1}
 .em-edges-front{z-index:25000}
-.em-edge-label{pointer-events:auto;cursor:pointer;font-family:var(--font-mono,ui-monospace,monospace);font-weight:600;
-  paint-order:stroke;stroke:var(--ui-bg-primary);stroke-width:3px;stroke-linejoin:round;user-select:none}
 .em-atom-layer{position:absolute;inset:0;pointer-events:none}
 .em-atom{position:absolute;left:0;top:0;width:116px;box-sizing:border-box;padding:4px 6px 5px;border-radius:6px;
   pointer-events:auto;cursor:pointer;user-select:none;overflow:hidden;
@@ -419,7 +423,9 @@ function Scene({
   const stageRef = useRef(null)
   const sizeRef = useRef({ w: 0, h: 0 })
   const atomEls = useRef(new Map())
-  const edgeEls = useRef(new Map())
+  const backRef = useRef(null)
+  const frontRef = useRef(null)
+  const haloRef = useRef('#0f1115')
   const hitRef = useRef([])
   const dragRef = useRef(null)
   const movedRef = useRef(0)
@@ -444,20 +450,10 @@ function Scene({
     if (el) atomEls.current.set(id, el)
     else atomEls.current.delete(id)
   }, [])
-  const setEdgeEl = useCallback((key, part, el) => {
-    let entry = edgeEls.current.get(key)
-    if (!entry) {
-      entry = {}
-      edgeEls.current.set(key, entry)
-    }
-    entry[part] = el
-  }, [])
 
   useEffect(() => {
     const live = new Set(scene.atoms.map(a => a.id))
     for (const id of [...atomEls.current.keys()]) if (!live.has(id)) atomEls.current.delete(id)
-    const liveEdges = new Set(scene.edges.map(e => e.key))
-    for (const k of [...edgeEls.current.keys()]) if (!liveEdges.has(k)) edgeEls.current.delete(k)
     camRef.current.dirty = true
   }, [scene, camRef])
 
@@ -484,6 +480,8 @@ function Scene({
         cam.fy = seed ? seed.y : 0
         cam.fz = seed ? seed.z : 0
       }
+      const cs = getComputedStyle(document.documentElement)
+      haloRef.current = cs.getPropertyValue('--ui-bg-primary').trim() || '#0f1115'
       cam.dirty = true
     }
     measure()
@@ -611,34 +609,65 @@ function Scene({
         el.style.zIndex = isSel ? '34000' : String(Math.round(20000 - p.z * 100))
       }
 
+      // ---- edges, on canvas -------------------------------------------------
+      // One Path2D per (color, opacity, width) bucket: thousands of edges collapse into
+      // a few dozen stroke() calls, and nothing in this loop touches the DOM.
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const prep = el => {
+        if (!el) return null
+        const pw = Math.round(w * dpr)
+        const ph = Math.round(h * dpr)
+        if (el.width !== pw || el.height !== ph) {
+          el.width = pw
+          el.height = ph
+        }
+        const c = el.getContext('2d')
+        c.setTransform(dpr, 0, 0, dpr, 0, 0)
+        c.clearRect(0, 0, w, h)
+        return c
+      }
+      const back = prep(backRef.current)
+      const front = prep(frontRef.current)
+
       const screenEdges = []
-      const showLabelFor = key => (selNow && selNow.type === 'edge' ? selNow.key : null) === key
+      const selKey = selNow && selNow.type === 'edge' ? selNow.key : null
+      const selAtom = selNow && selNow.type === 'atom' ? selNow.id : null
+      const labelsOn = labelsRef.current
+      // LOD by zoom (cam.dist relative to the distance that fits the whole graph), not by
+      // raw depth: when the camera pulls back the edges would stack into a sub-pixel haze,
+      // so draw a stable subset instead — half, then a quarter — with a higher alpha floor
+      // and a 1px minimum so the shape of the graph still reads.
+      const zoomOut = cam.dist / (cam.fit || cam.dist)
+      const coarse = zoomOut > 1.9
+      const midCoarse = !coarse && zoomOut > 1.15
+      const sampleEdge = (e, n) => (e.key.length + e.key.charCodeAt(0) + e.key.charCodeAt(e.key.length - 1)) % n === 0
+      const buckets = new Map()
+      const labels = []
+      let selEdge = null
 
       for (const edge of scene.edges) {
-        const entry = edgeEls.current.get(edge.key)
-        if (!entry) continue
         const a = positions.get(edge.src)
         const c = positions.get(edge.dst)
-        if (!a || !c) {
-          for (const el of Object.values(entry)) if (el) el.style.display = 'none'
-          continue
-        }
+        if (!a || !c) continue
+        const isSel = selKey === edge.key
+        const offP = p => p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80
+        if (!isSel && offP(a) && offP(c)) continue
+        if (!isSel && coarse && !sampleEdge(edge, 4)) continue
+        if (!isSel && midCoarse && !sampleEdge(edge, 2)) continue
         const inA = a.state !== 'out'
         const inB = c.state !== 'out'
         const cls = !active ? 'in' : inA && inB ? 'in' : inA || inB ? 'cross' : 'out'
-        const isSel = showLabelFor(edge.key)
-        const offP = p => p.x < -70 || p.x > w + 70 || p.y < -70 || p.y > h + 70
-        if (!isSel && offP(a) && offP(c)) {
-          for (const el of Object.values(entry)) if (el) el.style.display = 'none'
-          continue
-        }
-        const color = edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR
+        const color = edge.edited ? EDITED_COLOR : edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR
         const crossFade = edge.cross ? 0.45 : 1
         const depthFade = clamp(1.45 - Math.max(a.z, c.z) / (startDist * 1.85), 0.16, 1)
-        const baseOpacity = (cls === 'out' ? 0.04 : cls === 'cross' ? 0.12 : 0.22) * crossFade * depthFade
-        const opacity = isSel ? 1 : baseOpacity
+        const far = coarse || midCoarse
+        const baseOpacity = far
+          ? Math.max((cls === 'out' ? 0.05 : cls === 'cross' ? 0.13 : 0.2) * crossFade, coarse ? 0.14 : 0.1)
+          : (cls === 'out' ? 0.04 : cls === 'cross' ? 0.12 : 0.22) * crossFade * depthFade
         const k = clamp(startDist / Math.min(a.z, c.z), 0.45, 1.65)
-        const width = (1.15 + (isSel ? 2.0 : 0)) * (edge.cross ? 0.8 : 1) * k
+        const width = far
+          ? Math.max(0.9, 1.15 * (edge.cross ? 0.8 : 1) * k)
+          : 1.15 * (edge.cross ? 0.8 : 1) * k
 
         const dx = c.x - a.x
         const dy = c.y - a.y
@@ -646,49 +675,83 @@ function Scene({
         const bow = isSel ? 0.1 : edge.bow || 0.16
         const cx = (a.x + c.x) / 2 + (-dy / len) * bow * len
         const cy = (a.y + c.y) / 2 + (dx / len) * bow * len
-        const d = `M${a.x.toFixed(1)} ${a.y.toFixed(1)} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`
         // 筛选时两头都被排除的边不响应点击
         if (!active || fi.focus.has(edge.src) || fi.focus.has(edge.dst)) {
           screenEdges.push({ key: edge.key, edge, x1: a.x, y1: a.y, x2: c.x, y2: c.y, cx, cy })
         }
 
-        for (const part of ['glow', 'line']) {
-          const el = entry[part]
-          if (!el) continue
-          el.style.display = ''
-          el.setAttribute('d', d)
-          if (part === 'line') {
-            el.setAttribute('stroke-width', width.toFixed(2))
-            el.setAttribute('stroke', edge.edited ? 'url(#em-rainbow)' : color)
-            el.setAttribute('stroke-opacity', opacity.toFixed(3))
-            el.setAttribute('stroke-dasharray', edge.kind === 'none' ? '6 7' : '0')
-          } else {
-            el.setAttribute('stroke-width', (width * 4.4).toFixed(2))
-            el.setAttribute('stroke', edge.edited ? 'url(#em-rainbow)' : color)
-            el.setAttribute('stroke-opacity', (isSel ? 0.34 : edge.edited ? 0.18 : 0.035) * (cls === 'out' ? 0.4 : 1))
+        if (isSel) {
+          selEdge = { color, x1: a.x, y1: a.y, cx, cy, x2: c.x, y2: c.y, width }
+        } else if (back) {
+          const op = Math.round(baseOpacity * 100) / 100
+          const wd = Math.round(width * 2) / 2
+          const bucketKey = `${color}|${op}|${wd}`
+          let bucket = buckets.get(bucketKey)
+          if (!bucket) {
+            bucket = { color, op, wd, path: new Path2D() }
+            buckets.set(bucketKey, bucket)
           }
+          bucket.path.moveTo(a.x, a.y)
+          bucket.path.quadraticCurveTo(cx, cy, c.x, c.y)
         }
 
-        const label = entry.label
-        if (label) {
-          const selAtom = selNow && selNow.type === 'atom' ? selNow.id : null
-          const incident = selAtom != null && (edge.src === selAtom || edge.dst === selAtom)
-          const visible = isSel || (incident && len < 420) || (labelsRef.current && cls === 'in' && len > 120)
-          if (!visible) {
-            label.style.display = 'none'
-          } else {
-            label.style.display = ''
-            const mx = 0.25 * a.x + 0.5 * cx + 0.25 * c.x
-            const my = 0.25 * a.y + 0.5 * cy + 0.25 * c.y
-            label.setAttribute('x', mx.toFixed(1))
-            label.setAttribute('y', (my - 6).toFixed(1))
-            label.setAttribute('font-size', (11 * k).toFixed(1))
-            label.setAttribute('fill', edge.edited ? 'url(#em-rainbow)' : color)
-            label.setAttribute('fill-opacity', (isSel ? 1 : cls === 'cross' ? 0.55 : 0.85).toFixed(2))
-            label.textContent = edge.kind === 'none' ? '无' : edge.rel
-          }
-        }
+        const incident = selAtom != null && (edge.src === selAtom || edge.dst === selAtom)
+        const visible = isSel || (incident && len < 420) || (labelsOn && cls === 'in' && len > 120)
+        if (!visible) continue
+        labels.push({
+          text: edge.kind === 'none' ? '无' : edge.rel,
+          color,
+          x: 0.25 * a.x + 0.5 * cx + 0.25 * c.x,
+          y: 0.25 * a.y + 0.5 * cy + 0.25 * c.y,
+          size: 11 * k,
+          alpha: isSel ? 1 : cls === 'cross' ? 0.55 : 0.85,
+          selected: isSel
+        })
       }
+
+      if (back) {
+        back.lineCap = 'round'
+        for (const b of buckets.values()) {
+          back.globalAlpha = b.op
+          back.strokeStyle = b.color
+          back.lineWidth = b.wd
+          back.stroke(b.path)
+        }
+        back.globalAlpha = 1
+      }
+
+      if (front && selEdge) {
+        const path = new Path2D()
+        path.moveTo(selEdge.x1, selEdge.y1)
+        path.quadraticCurveTo(selEdge.cx, selEdge.cy, selEdge.x2, selEdge.y2)
+        front.lineCap = 'round'
+        front.strokeStyle = selEdge.color
+        front.globalAlpha = 0.34
+        front.lineWidth = selEdge.width * 4.4
+        front.stroke(path)
+        front.globalAlpha = 1
+        front.lineWidth = selEdge.width + 2
+        front.stroke(path)
+      }
+
+      if (front && labels.length) {
+        const halo = haloRef.current
+        front.textAlign = 'center'
+        front.textBaseline = 'alphabetic'
+        front.lineJoin = 'round'
+        for (const lb of labels) {
+          front.font = `600 ${lb.size.toFixed(1)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
+          front.globalAlpha = lb.selected ? 1 : 0.9
+          front.lineWidth = 3
+          front.strokeStyle = halo
+          front.strokeText(lb.text, lb.x, lb.y - 6)
+          front.fillStyle = lb.color
+          front.globalAlpha = lb.alpha
+          front.fillText(lb.text, lb.x, lb.y - 6)
+        }
+        front.globalAlpha = 1
+      }
+
       hitRef.current = screenEdges
     }
 
@@ -914,55 +977,6 @@ function Scene({
     [scene, setAtomEl]
   )
 
-  const edgesTree = useMemo(
-    () =>
-      scene.edges.map(edge =>
-        jsxs(
-          'g',
-          {
-            className: 'em-edge',
-            'data-kind': edge.kind,
-            'data-edited': edge.edited ? '1' : '0',
-            children: [
-              jsx('path', {
-                ref: el => setEdgeEl(edge.key, 'glow', el),
-                className: 'em-edge-glow',
-                d: 'M0 0',
-                fill: 'none',
-                stroke: edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR,
-                strokeWidth: 4,
-                strokeLinecap: 'round'
-              }),
-              jsx('path', {
-                ref: el => setEdgeEl(edge.key, 'line', el),
-                className: 'em-edge-line',
-                d: 'M0 0',
-                fill: 'none',
-                stroke: edge.kind === 'none' ? NONE_COLOR : REL_COLORS[edge.rel] || NONE_COLOR,
-                strokeWidth: 2,
-                strokeLinecap: 'round'
-              }),
-              jsx('text', {
-                ref: el => setEdgeEl(edge.key, 'label', el),
-                className: 'em-edge-label',
-                x: 0,
-                y: 0,
-                textAnchor: 'middle',
-                onClick: e => {
-                  e.stopPropagation()
-                  if (movedRef.current > 5) return
-                  handlersRef.current.onSelectEdge(edge)
-                },
-                children: edge.kind === 'none' ? '无' : edge.rel
-              })
-            ]
-          },
-          edge.key
-        )
-      ),
-    [scene, setEdgeEl]
-  )
-
   return jsxs('div', {
     ref: stageRef,
     className: 'em-stage',
@@ -1008,26 +1022,8 @@ function Scene({
     },
     children: [
       jsx('div', { className: 'em-atom-layer', children: atomsTree }),
-      jsxs('svg', {
-        className: 'em-edges em-edges-front',
-        width: '100%',
-        height: '100%',
-        children: [
-          jsx('defs', {
-            children: jsx('linearGradient', {
-              id: 'em-rainbow',
-              x1: '0%',
-              y1: '0%',
-              x2: '100%',
-              y2: '100%',
-              children: ['#ff5f6d', '#ffc371', '#a8e063', '#56ccf2', '#9b73ff', '#ff5f6d'].map((c, i, arr) =>
-                jsx('stop', { offset: `${(i / (arr.length - 1)) * 100}%`, stopColor: c }, i)
-              )
-            })
-          }),
-          jsx('g', { className: 'em-edge-layer', children: edgesTree })
-        ]
-      })
+      jsx('canvas', { ref: backRef, className: 'em-edges em-edge-back' }),
+      jsx('canvas', { ref: frontRef, className: 'em-edges em-edges-front' })
     ]
   })
 }

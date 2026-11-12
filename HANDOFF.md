@@ -233,3 +233,19 @@ tar czf - --exclude=.git --exclude=__pycache__ . | \
 ```
 
 推送仍然只能由 Windows 的 GitHub Desktop 做（两边 git CLI 都没有 GitHub 凭据）。
+
+## 图谱渲染与概览布局（2026-11-12 晚）
+
+- **边不再是 SVG。** 每条边原来有 2 个 `<path>` + 1 个 `<text>`，真库 3652 组 = 7304 个 path；
+  相机一动就逐条重写 `d`/`stroke`，同样的场景实测 **26.6 fps（中位 33ms，p95 50ms）**。
+  现在边画在两块 canvas 上（底层在卡片下、前层放选中边和标签），按 `(颜色, 透明度, 线宽)`
+  合并成 Path2D 一次 `stroke()`，同场景 **59.7 fps（中位 16.7ms，p95 16.7ms）**。
+  边的点击本来就是舞台上的几何命中测试，不依赖 DOM，所以交互没退。
+- **LOD 按缩放而不是按深度：** `cam.dist / cam.fit > 1.15` 每两条画一条，`> 1.9` 每四条画一条，
+  同时抬高透明度下限、线宽最小 1px —— 缩远看到的是稀疏网而不是一堆亚像素雾。
+- **人工改过的边**原来是 SVG 的 `linearGradient`，canvas 里换成纯色 `#c58bff`。
+- **概览两栏等高：** `.emg-card + .emg-card{margin-top:12px}` 在 grid 里会把第二张卡压矮 12px
+  且下移 12px（复现：top 26 vs 14、height 225 vs 237）。`.emg-grid` 现在 `align-items:stretch`
+  且 `.emg-grid > .emg-card{margin-top:0}`。
+- **量这个的工具**在 `tools/plugin-smoke/bench/`（真 Chromium + 真场景 + esm.sh 的 React），
+  改图谱时先跑一次 `await __bench(3000)` 再下结论。

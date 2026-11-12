@@ -1,0 +1,19 @@
+<!doctype html><meta charset=utf-8>
+<title>eventmem graph bench</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0c0f;color:#c9cdd3;
+    font-family:system-ui,-apple-system,'Noto Sans CJK SC',sans-serif}
+  #root{position:fixed;inset:0}
+  #hud{position:fixed;left:8px;top:8px;z-index:99999;font:12px ui-monospace,monospace;
+    background:#000a;padding:6px 10px;border-radius:6px;white-space:pre;pointer-events:none}
+</style>
+<script type="importmap">
+{"imports":{
+  "react":"https://esm.sh/react@19.2.0",
+  "react/jsx-runtime":"https://esm.sh/react@19.2.0/jsx-runtime",
+  "react-dom/client":"https://esm.sh/react-dom@19.2.0/client",
+  "@hermes/plugin-sdk":"./sdk-stub.mjs"
+}}
+</script>
+<div id=root></div><div id=hud></div>
+<script type=module src=./bench.mjs></script>
