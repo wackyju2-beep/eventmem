@@ -25,20 +25,21 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 const ID = 'eventmem-graph'
 
 const KIND_COLORS = {
-  决定: '#6aa9ff',
-  尝试: '#3ad6c4',
-  结果: '#48c979',
-  变更: '#f2a93b',
-  教训: '#ff6f8e'
+  决定: '#7ea9e0',
+  尝试: '#68c3ba',
+  结果: '#79c08c',
+  变更: '#d7a35f',
+  教训: '#d97c92'
 }
+// 关系色是一族：同样的明度、都压掉一半饱和度，线才不会互相抢。
 const REL_COLORS = {
-  改变: '#f2a93b',
-  否定: '#ff5d5d',
-  重复: '#3ec7a4',
-  因为: '#a877ff',
-  细化: '#54a8ff'
+  改变: '#d9a05b',
+  否定: '#d0707f',
+  重复: '#6fae9c',
+  因为: '#a08ad8',
+  细化: '#6f9fd8'
 }
-const NONE_COLOR = '#8b93a3'
+const NONE_COLOR = '#5f6672'
 // 人工改过的边原来吃 SVG 的 linearGradient；canvas 里一个纯色更省，也更清楚。
 const EDITED_COLOR = '#c58bff'
 const KINDS = ['决定', '尝试', '结果', '变更', '教训']
@@ -69,34 +70,37 @@ const CSS = `
    The card body never gets transform-scaled, so its text stays crisp at every size. */
 .em-atom{position:absolute;left:0;top:0;width:176px;height:56px;pointer-events:none;
   user-select:none;contain:layout style paint;will-change:transform}
-.em-atom-body{position:absolute;left:0;top:0;overflow:hidden;pointer-events:auto;cursor:pointer;
+/* The wrapper is 176x56 and the body shrinks inside it, so the body must be centred —
+   anchored top-left it drifts away from the projected point and the edges then miss it. */
+.em-atom-body{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden;
+  pointer-events:auto;cursor:pointer;
   width:calc(20px + 156px * var(--m,0));height:calc(20px + 36px * var(--m,0));
-  border-radius:calc(10px - 1px * var(--m,0));
+  border-radius:calc(10px - var(--m,0) * 1px);
   background:var(--ui-bg-card);
   border-style:solid;border-color:color-mix(in srgb,var(--ui-stroke-secondary) 72%,transparent);
   border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));
-  box-shadow:0 3px 10px color-mix(in srgb,var(--ui-base) 26%,transparent)}
+  box-shadow:0 2px 8px color-mix(in srgb,var(--ui-base) 30%,transparent)}
 .em-atom-num{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
   font:700 9px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
   opacity:calc(1 - var(--m,0));pointer-events:none}
 .em-atom-card{position:absolute;left:0;top:0;width:176px;height:56px;box-sizing:border-box;
   padding:5px 9px;pointer-events:none;opacity:clamp(0,calc((var(--m,0) - 0.5) * 2.4),1)}
-.em-atom[data-kind="决定"] .em-atom-body{border-left-color:#6aa9ff}
-.em-atom[data-kind="尝试"] .em-atom-body{border-left-color:#3ad6c4}
-.em-atom[data-kind="结果"] .em-atom-body{border-left-color:#48c979}
-.em-atom[data-kind="变更"] .em-atom-body{border-left-color:#f2a93b}
-.em-atom[data-kind="教训"] .em-atom-body{border-left-color:#ff6f8e}
+.em-atom[data-kind="决定"] .em-atom-body{border-left-color:#7ea9e0}
+.em-atom[data-kind="尝试"] .em-atom-body{border-left-color:#68c3ba}
+.em-atom[data-kind="结果"] .em-atom-body{border-left-color:#79c08c}
+.em-atom[data-kind="变更"] .em-atom-body{border-left-color:#d7a35f}
+.em-atom[data-kind="教训"] .em-atom-body{border-left-color:#d97c92}
 .em-atom:hover .em-atom-body{box-shadow:0 6px 18px color-mix(in srgb,var(--ui-base) 42%,transparent)}
-.em-atom[data-selected="1"] .em-atom-body{box-shadow:0 0 0 2px var(--ui-accent),0 8px 22px color-mix(in srgb,var(--ui-base) 46%,transparent)}
+.em-atom[data-selected="1"] .em-atom-body{box-shadow:0 0 0 1.5px color-mix(in srgb,var(--ui-accent) 80%,transparent),0 10px 26px color-mix(in srgb,var(--ui-base) 50%,transparent)}
 .em-atom[data-edited="1"] .em-atom-body::after{content:'';position:absolute;inset:-1px;border-radius:inherit;padding:2px;pointer-events:none;
   background:conic-gradient(from 0deg,#ff5f6d,#ffc371,#a8e063,#56ccf2,#9b73ff,#ff5f6d);
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude;animation:em-hue 7s linear infinite}
-.em-atom-head{display:flex;align-items:center;gap:5px;font-size:8.5px;line-height:1.2}
+.em-atom-head{display:flex;align-items:center;gap:5px;font-size:9px;line-height:1.25;letter-spacing:.01em}
 .em-atom-id{font-family:var(--font-mono,ui-monospace,monospace);font-weight:700;color:var(--ui-text-primary)}
 .em-atom-kind{font-weight:600}
 .em-atom-time{margin-left:auto;color:var(--ui-text-quaternary);font-variant-numeric:tabular-nums;white-space:nowrap}
-.em-atom-text{margin-top:3px;font-size:9px;line-height:1.35;color:var(--ui-text-secondary);word-break:break-word;
+.em-atom-text{margin-top:3px;font-size:9.5px;line-height:1.4;color:var(--ui-text-secondary);word-break:break-word;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .em-atom-edited{position:absolute;right:5px;bottom:3px;font-size:9px;color:var(--ui-accent);opacity:.9}
 @keyframes em-hue{to{filter:hue-rotate(360deg)}}
@@ -728,8 +732,8 @@ function Scene({
         const k = clamp(startDist / Math.min(a.z, c.z), 0.45, 1.65)
         const width = far ? Math.max(0.9, 1.15 * (edge.cross ? 0.8 : 1) * k) : 1.15 * (edge.cross ? 0.8 : 1) * k
         const baseOpacity = far
-          ? Math.max(0.2 * crossFade, coarse ? 0.14 : 0.1)
-          : 0.22 * crossFade * depthFade
+          ? Math.max(0.16 * crossFade, coarse ? 0.12 : 0.09)
+          : 0.17 * crossFade * depthFade
 
         screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
 
@@ -760,8 +764,8 @@ function Scene({
           color,
           x: 0.25 * A.x + 0.5 * ctlX + 0.25 * C.x,
           y: 0.25 * A.y + 0.5 * ctlY + 0.25 * C.y,
-          size: 11 * k,
-          alpha: isSel ? 1 : 0.85,
+          size: (isSel ? 11 : 9.5) * clamp(k, 0.8, 1.2),
+          alpha: isSel ? 1 : 0.7,
           selected: isSel
         })
       }
@@ -863,7 +867,6 @@ function Scene({
       startAnim(a, to)
       animateCamera(cam, { fx: to.x, fy: to.y, fz: to.z, dist: D, panX, panY: 0 }, 820)
 
-      // 把直接相连的邻居在镜头平面上摆成一圈：它们的线全部落在可视区里，能直接点。
       const seen = new Set()
       const links = []
       for (const e of scene.edges) {
@@ -873,27 +876,40 @@ function Scene({
         links.push({ id: other, conf: e.conf || 0 })
       }
       links.sort((x, y) => y.conf - x.conf)
-      const worldPerPx = D / focal
-      // 一圈能放几张由可用空间决定：卡宽 176，留 ~210px 弧长，塞不下的邻居留在原地。
-      const ringPx = Math.min(usableW * 0.42, h * 0.4, 360)
-      const slots = Math.max(4, Math.min(14, Math.floor((Math.PI * 2 * ringPx) / 210)))
-      const ring = links.slice(0, slots)
-      const rx = ringPx * worldPerPx
-      const ry = Math.min(ringPx * 0.72, h * 0.34) * worldPerPx
-      ringRef.current = new Set([a.id, ...ring.map(link => link.id)])
-      ring.forEach((link, i) => {
-        const mate = scene.byId.get(link.id)
-        if (!mate) return
-        const ang = -Math.PI / 2 + (i / Math.max(ring.length, 1)) * Math.PI * 2
-        // 屏幕 y 向下、世界 up 向上，所以 sin 取负。
-        const sx = Math.cos(ang) * rx
-        const sy = -Math.sin(ang) * ry
-        startAnim(mate, {
-          x: to.x + b.rx * sx + b.ux * sy,
-          y: to.y + b.ry * sx + b.uy * sy,
-          z: to.z + b.rz * sx + b.uz * sy
-        })
-      })
+
+      // 3D 收拢：每个邻居沿「它→焦点」的方向被拉近，直到投影落进可视区。
+      // 方向不变，所以云团还是三维的——不是把大家摊到一张平面上的环形菜单。
+      const mates = links.map(link => scene.byId.get(link.id)).filter(Boolean).slice(0, 26)
+      const maxR = Math.min(usableW * 0.42, h * 0.4, 380)
+      // 两圈：装得下的才算，装不下的留在原地（右侧列表里仍可点），避免卡片互相压住。
+      const perRing = Math.max(3, Math.floor((Math.PI * 2 * maxR) / 205))
+      const outer = mates.slice(0, perRing)
+      const inner = mates.slice(perRing, perRing + Math.max(2, Math.floor(perRing * 0.6)))
+      const picked = [...outer, ...inner]
+      ringRef.current = new Set([a.id, ...picked.map(m => m.id)])
+      for (const [i, mate] of picked.entries()) {
+        const dx = mate.x - to.x
+        const dy = mate.y - to.y
+        const dz = mate.z - to.z
+        // 先投影：它此刻在屏幕上离焦点多远
+        const sxw = dx * b.rx + dy * b.ry + dz * b.rz
+        const syw = dx * b.ux + dy * b.uy + dz * b.uz
+        const zc = Math.max(D + (dx * b.fx + dy * b.fy + dz * b.fz), 0.4)
+        const r = Math.hypot((sxw * focal) / zc, (-syw * focal) / zc)
+        const band = i < outer.length ? maxR : maxR * 0.62
+        // Scaling the whole offset also changes its depth, so the projected radius is not
+        // linear in t — solve it by iteration, otherwise deep neighbours overshoot the edge.
+        let t = r < 1 ? 1 : clamp(band / r, 0.05, 3)
+        if (r >= 1) {
+          const dz0 = dx * b.fx + dy * b.fy + dz * b.fz
+          for (let it = 0; it < 3; it += 1) {
+            const zc2 = Math.max(D + dz0 * t, 0.4)
+            const projected = t * r * (zc / zc2)
+            t = clamp(t * (band / Math.max(projected, 1)), 0.05, 3)
+          }
+        }
+        startAnim(mate, { x: to.x + dx * t, y: to.y + dy * t, z: to.z + dz * t })
+      }
     } else {
       const a = scene.byId.get(req.src)
       const c = scene.byId.get(req.dst)
