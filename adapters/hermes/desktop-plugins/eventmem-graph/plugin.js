@@ -62,38 +62,33 @@ const CSS = `
 .em-edge-back{z-index:1}
 .em-edges-front{z-index:25000}
 .em-atom-layer{position:absolute;inset:0;pointer-events:none}
-/* An atom is two layers: far away only a numbered ball, close up a rounded card fades in
-   over it. Both live in one wrapper and cross-fade by opacity, so the morph is continuous
-   instead of snapping between layouts. The card background is opaque — the text needs it,
-   and it drops an alpha blend out of every frame. */
+/* An atom is ONE element whose geometry morphs with distance: a 20px ball at --m 0 grows
+   into the 176x56 card at --m 1, and its border-radius goes 10px -> 9px, which is exactly a
+   circle at 20px. Everything (size, radius, which label shows) is driven by the single
+   --m custom property, so the shape transform is continuous instead of a cross-fade.
+   The card body never gets transform-scaled, so its text stays crisp at every size. */
 .em-atom{position:absolute;left:0;top:0;width:176px;height:56px;pointer-events:none;
-  user-select:none;will-change:transform}
-.em-atom-card{position:absolute;inset:0;box-sizing:border-box;padding:5px 9px;border-radius:9px;
-  overflow:hidden;pointer-events:auto;cursor:pointer;background:var(--ui-bg-card);
-  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 72%,transparent);
-  border-left:3px solid var(--ui-stroke-secondary);
+  user-select:none;contain:layout style paint;will-change:transform}
+.em-atom-body{position:absolute;left:0;top:0;overflow:hidden;pointer-events:auto;cursor:pointer;
+  width:calc(20px + 156px * var(--m,0));height:calc(20px + 36px * var(--m,0));
+  border-radius:calc(10px - 1px * var(--m,0));
+  background:var(--ui-bg-card);
+  border-style:solid;border-color:color-mix(in srgb,var(--ui-stroke-secondary) 72%,transparent);
+  border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));
   box-shadow:0 3px 10px color-mix(in srgb,var(--ui-base) 26%,transparent)}
-.em-atom-dot{position:absolute;left:50%;top:50%;width:20px;height:20px;margin:-10px 0 0 -10px;
-  border-radius:50%;display:grid;place-items:center;pointer-events:auto;cursor:pointer;
-  background:var(--ui-bg-card);border:1px solid var(--ui-stroke-secondary);
+.em-atom-num{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
   font:700 9px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
-  box-shadow:0 2px 6px color-mix(in srgb,var(--ui-base) 34%,transparent)}
-.em-atom[data-kind="决定"] .em-atom-card{border-left-color:#6aa9ff}
-.em-atom[data-kind="尝试"] .em-atom-card{border-left-color:#3ad6c4}
-.em-atom[data-kind="结果"] .em-atom-card{border-left-color:#48c979}
-.em-atom[data-kind="变更"] .em-atom-card{border-left-color:#f2a93b}
-.em-atom[data-kind="教训"] .em-atom-card{border-left-color:#ff6f8e}
-.em-atom[data-kind="决定"] .em-atom-dot{border-color:#6aa9ff;color:#8dbeff}
-.em-atom[data-kind="尝试"] .em-atom-dot{border-color:#3ad6c4;color:#6ce4d6}
-.em-atom[data-kind="结果"] .em-atom-dot{border-color:#48c979;color:#74d99b}
-.em-atom[data-kind="变更"] .em-atom-dot{border-color:#f2a93b;color:#f6c06d}
-.em-atom[data-kind="教训"] .em-atom-dot{border-color:#ff6f8e;color:#ff9db2}
-.em-atom[data-mode="dot"] .em-atom-card{pointer-events:none}
-.em-atom[data-mode="card"] .em-atom-dot{pointer-events:none}
-.em-atom:hover .em-atom-card{box-shadow:0 6px 18px color-mix(in srgb,var(--ui-base) 42%,transparent);
-  border-color:color-mix(in srgb,var(--ui-accent) 45%,var(--ui-stroke-secondary))}
-.em-atom[data-selected="1"] .em-atom-card{box-shadow:0 0 0 2px var(--ui-accent),0 8px 22px color-mix(in srgb,var(--ui-base) 46%,transparent)}
-.em-atom[data-edited="1"] .em-atom-card::after{content:'';position:absolute;inset:-1px;border-radius:10px;padding:2px;pointer-events:none;
+  opacity:calc(1 - var(--m,0));pointer-events:none}
+.em-atom-card{position:absolute;left:0;top:0;width:176px;height:56px;box-sizing:border-box;
+  padding:5px 9px;pointer-events:none;opacity:clamp(0,calc((var(--m,0) - 0.5) * 2.4),1)}
+.em-atom[data-kind="决定"] .em-atom-body{border-left-color:#6aa9ff}
+.em-atom[data-kind="尝试"] .em-atom-body{border-left-color:#3ad6c4}
+.em-atom[data-kind="结果"] .em-atom-body{border-left-color:#48c979}
+.em-atom[data-kind="变更"] .em-atom-body{border-left-color:#f2a93b}
+.em-atom[data-kind="教训"] .em-atom-body{border-left-color:#ff6f8e}
+.em-atom:hover .em-atom-body{box-shadow:0 6px 18px color-mix(in srgb,var(--ui-base) 42%,transparent)}
+.em-atom[data-selected="1"] .em-atom-body{box-shadow:0 0 0 2px var(--ui-accent),0 8px 22px color-mix(in srgb,var(--ui-base) 46%,transparent)}
+.em-atom[data-edited="1"] .em-atom-body::after{content:'';position:absolute;inset:-1px;border-radius:inherit;padding:2px;pointer-events:none;
   background:conic-gradient(from 0deg,#ff5f6d,#ffc371,#a8e063,#56ccf2,#9b73ff,#ff5f6d);
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
   -webkit-mask-composite:xor;mask-composite:exclude;animation:em-hue 7s linear infinite}
@@ -440,6 +435,8 @@ function Scene({
   const haloRef = useRef('#0f1115')
   // 选中时只留焦点邻域，其余原子整个收起来；按 (选择, 过滤器, 场景) 身份缓存。
   const visRef = useRef({ key: '', fi: null, scene: null, set: null })
+  // 选中原子时真正摆到镜头前的那一圈邻居：只有它们上舞台，其余在右侧列表里点。
+  const ringRef = useRef(null)
   const hitRef = useRef([])
   const dragRef = useRef(null)
   const movedRef = useRef(0)
@@ -599,9 +596,12 @@ function Scene({
           const set = new Set()
           if (selNow.type === 'atom') {
             set.add(selNow.id)
-            for (const e of scene.edges) {
-              if (e.src === selNow.id) set.add(e.dst)
-              else if (e.dst === selNow.id) set.add(e.src)
+            if (ringRef.current) for (const id of ringRef.current) set.add(id)
+            else {
+              for (const e of scene.edges) {
+                if (e.src === selNow.id) set.add(e.dst)
+                else if (e.dst === selNow.id) set.add(e.src)
+              }
             }
           } else {
             const found = scene.edges.find(x => x.key === selNow.key)
@@ -629,29 +629,31 @@ function Scene({
           if (el) el.style.display = 'none'
           continue
         }
-        // 缩放到小球与卡片之间交叉淡出：s 是连续量，所以“球→圆角矩形→展开”没有档位跳变。
-        const s = clamp(p.k, 0.26, 1.06)
-        const cardIn = smoothstep(0.46, 0.66, s)
-        const mode = s < 0.56 ? 'dot' : 'card'
         const isSelAtom = selNow && selNow.type === 'atom' && selNow.id === atom.id
-        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, s, mode })
+        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, k: p.k, el, isSelAtom })
         if (!el) continue
         el.style.display = ''
-        if (el.dataset.mode !== mode) el.dataset.mode = mode
-        el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%) scale(${s.toFixed(3)})`
+        el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%)`
         el.dataset.selected = isSelAtom ? '1' : '0'
-        // 选中层压在所有边/标签之上（canvas 前层是 25000）。
         el.style.zIndex = isSelAtom ? '34000' : String(Math.round(20000 - p.z * 100))
-        const dot = el.children[0]
-        const card = el.children[1]
-        // 小球反向缩放，远处也保持能看清的直径。
-        if (dot) {
-          // Partial counter-scale (exponent < 1): a far ball shrinks with distance instead of
-          // staying 20px and turning the cloud into a wall of overlapping numbers.
-          dot.style.opacity = (1 - cardIn).toFixed(3)
-          dot.style.transform = `scale(${Math.min(1.9, (1 / Math.max(s, 0.18)) ** 0.55).toFixed(2)})`
-        }
-        if (card) card.style.opacity = cardIn.toFixed(3)
+      }
+
+      // 卡片预算：钻进云团时把最近的一批变成卡片，更远的继续当小球，
+      // 否则几百张卡会互相压住。（排名变化是连续的，过渡带也做了衰减，不会跳。）
+      const CARD_BUDGET = 46
+      const ranked = []
+      for (const [id, p] of positions) if (p && p.el) ranked.push(p)
+      ranked.sort((a, b) => a.z - b.z)
+      for (let i = 0; i < ranked.length; i += 1) {
+        const p = ranked[i]
+        // One number drives the whole morph: 0 = 20px ball, 1 = 176x56 card. Continuous in
+        // distance, so the shape is a real transform rather than a switch between layouts.
+        let m = smoothstep(0.3, 0.72, clamp(p.k, 0.26, 1.06))
+        if (i >= CARD_BUDGET) m *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
+        p.m = m
+        p.w = 20 + 156 * m
+        p.h = 20 + 36 * m
+        p.el.style.setProperty('--m', m.toFixed(3))
       }
 
       // ---- edges, on canvas -------------------------------------------------
@@ -675,13 +677,10 @@ function Scene({
       const front = prep(frontRef.current)
 
       // 连线从卡片/小球的边缘出发，不从中心穿过去。
-      const CARD_W = 176
-      const CARD_H = 56
-      const DOT_R = 10
+      // 连线锚点用卡片“当前”的尺寸（小球 20px、满卡 176x56），随 --m 连续变化。
       const anchorOn = (p, dirX, dirY) => {
-        if (p.mode === 'dot') return { x: p.x + dirX * DOT_R, y: p.y + dirY * DOT_R }
-        const hw = (CARD_W * p.s) / 2
-        const hh = (CARD_H * p.s) / 2
+        const hw = p.w / 2
+        const hh = p.h / 2
         const ax = Math.abs(dirX) || 1e-6
         const ay = Math.abs(dirY) || 1e-6
         const t = Math.min(hw / ax, hh / ay)
@@ -697,6 +696,7 @@ function Scene({
       const sampleEdge = (e, n) => (e.key.length + e.key.charCodeAt(0) + e.key.charCodeAt(e.key.length - 1)) % n === 0
       const buckets = new Map()
       const labels = []
+      const hotEdges = []
       let selEdge = null
 
       for (const edge of scene.edges) {
@@ -733,8 +733,12 @@ function Scene({
 
         screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
 
+        const hot = selNow && selNow.type === 'atom' && (edge.src === selNow.id || edge.dst === selNow.id)
         if (isSel) {
           selEdge = { color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width }
+        } else if (hot) {
+          // 选中原子时，它连着的每条线都提到前层高光，便于看清“它连去了哪”。
+          hotEdges.push({ color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width: Math.max(width, 1.4) })
         } else if (back) {
           const op = Math.round(baseOpacity * 100) / 100
           const wd = Math.round(width * 2) / 2
@@ -771,6 +775,23 @@ function Scene({
           back.stroke(b.path)
         }
         back.globalAlpha = 1
+      }
+
+      if (front && hotEdges.length) {
+        front.lineCap = 'round'
+        for (const h of hotEdges) {
+          const path = new Path2D()
+          path.moveTo(h.x1, h.y1)
+          path.quadraticCurveTo(h.cx, h.cy, h.x2, h.y2)
+          front.strokeStyle = h.color
+          front.globalAlpha = 0.18
+          front.lineWidth = h.width * 3.6
+          front.stroke(path)
+          front.globalAlpha = 0.95
+          front.lineWidth = h.width
+          front.stroke(path)
+        }
+        front.globalAlpha = 1
       }
 
       if (front && selEdge) {
@@ -841,6 +862,38 @@ function Scene({
       const to = { x: a.x + b.fx * PULL_IN, y: a.y + b.fy * PULL_IN, z: a.z + b.fz * PULL_IN }
       startAnim(a, to)
       animateCamera(cam, { fx: to.x, fy: to.y, fz: to.z, dist: D, panX, panY: 0 }, 820)
+
+      // 把直接相连的邻居在镜头平面上摆成一圈：它们的线全部落在可视区里，能直接点。
+      const seen = new Set()
+      const links = []
+      for (const e of scene.edges) {
+        const other = e.src === a.id ? e.dst : e.dst === a.id ? e.src : null
+        if (other == null || seen.has(other)) continue
+        seen.add(other)
+        links.push({ id: other, conf: e.conf || 0 })
+      }
+      links.sort((x, y) => y.conf - x.conf)
+      const worldPerPx = D / focal
+      // 一圈能放几张由可用空间决定：卡宽 176，留 ~210px 弧长，塞不下的邻居留在原地。
+      const ringPx = Math.min(usableW * 0.42, h * 0.4, 360)
+      const slots = Math.max(4, Math.min(14, Math.floor((Math.PI * 2 * ringPx) / 210)))
+      const ring = links.slice(0, slots)
+      const rx = ringPx * worldPerPx
+      const ry = Math.min(ringPx * 0.72, h * 0.34) * worldPerPx
+      ringRef.current = new Set([a.id, ...ring.map(link => link.id)])
+      ring.forEach((link, i) => {
+        const mate = scene.byId.get(link.id)
+        if (!mate) return
+        const ang = -Math.PI / 2 + (i / Math.max(ring.length, 1)) * Math.PI * 2
+        // 屏幕 y 向下、世界 up 向上，所以 sin 取负。
+        const sx = Math.cos(ang) * rx
+        const sy = -Math.sin(ang) * ry
+        startAnim(mate, {
+          x: to.x + b.rx * sx + b.ux * sy,
+          y: to.y + b.ry * sx + b.uy * sy,
+          z: to.z + b.rz * sx + b.uz * sy
+        })
+      })
     } else {
       const a = scene.byId.get(req.src)
       const c = scene.byId.get(req.dst)
@@ -990,7 +1043,6 @@ function Scene({
             className: 'em-atom',
             'data-id': a.id,
             'data-kind': a.kind,
-            'data-mode': 'card',
             'data-selected': '0',
             'data-edited': a.edited_ts ? '1' : '0',
             title: `${a.text}\n\n${fmtFull(a.ts)} · ${a.project || '未归类'}`,
@@ -999,28 +1051,31 @@ function Scene({
               if (movedRef.current > 5) return
               handlersRef.current.onSelectAtom(a.id)
             },
-            children: [
-              jsx('div', { className: 'em-atom-dot', children: `#${a.id}` }),
-              jsxs('div', {
-                className: 'em-atom-card',
-                children: [
-                  jsxs('div', {
-                    className: 'em-atom-head',
-                    children: [
-                      jsx('span', { className: 'em-atom-id', children: `#${a.id}` }),
-                      jsx('span', {
-                        className: 'em-atom-kind',
-                        style: { color: KIND_COLORS[a.kind] || 'var(--ui-text-secondary)' },
-                        children: a.kind
-                      }),
-                      jsx('span', { className: 'em-atom-time', children: fmtTime(a.ts) })
-                    ]
-                  }),
-                  jsx('div', { className: 'em-atom-text', children: a.text }),
-                  a.edited_ts ? jsx('span', { className: 'em-atom-edited', title: '人工改过', children: '✎' }) : null
-                ]
-              })
-            ]
+            children: jsxs('div', {
+              className: 'em-atom-body',
+              children: [
+                jsx('span', { className: 'em-atom-num', children: `#${a.id}` }),
+                jsxs('div', {
+                  className: 'em-atom-card',
+                  children: [
+                    jsxs('div', {
+                      className: 'em-atom-head',
+                      children: [
+                        jsx('span', { className: 'em-atom-id', children: `#${a.id}` }),
+                        jsx('span', {
+                          className: 'em-atom-kind',
+                          style: { color: KIND_COLORS[a.kind] || 'var(--ui-text-secondary)' },
+                          children: a.kind
+                        }),
+                        jsx('span', { className: 'em-atom-time', children: fmtTime(a.ts) })
+                      ]
+                    }),
+                    jsx('div', { className: 'em-atom-text', children: a.text }),
+                    a.edited_ts ? jsx('span', { className: 'em-atom-edited', title: '人工改过', children: '✎' }) : null
+                  ]
+                })
+              ]
+            })
           },
           a.id
         )
