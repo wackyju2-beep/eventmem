@@ -173,6 +173,13 @@ class JevClient:
 
     # ---------------------------------------------------------------- decide (choice)
 
+    @staticmethod
+    def _allow_none(criteria: dict[str, str]) -> bool:
+        """Ask for the server's implicit none only if we did not send one ourselves."""
+        from .providers import NONE_OF_ABOVE
+
+        return NONE_OF_ABOVE not in criteria
+
     def decide_choice(
         self, state: str, questions: list[tuple[str, str, dict[str, str]]]
     ) -> list[dict | None] | None:
@@ -210,7 +217,10 @@ class JevClient:
                     "type": "choice",
                     "instructions": text,
                     "criteria": criteria,
-                    "allow_none": True,
+                    # A question that already offers 「都不是」 as a real label must not also
+                    # get the server's implicit none: two "none" options split the mass and
+                    # the backends stop agreeing on what the answer means.
+                    "allow_none": self._allow_none(criteria),
                 }
                 for key, text, criteria in items
             },

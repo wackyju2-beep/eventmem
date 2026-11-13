@@ -90,6 +90,9 @@ plugins:
 | `neighbour_cap` | `30` | 一次导航最多渲染几条 |
 | `neighbour_depth_max` | `3` | `depth` 的上限 |
 | `project_hint_limit` | `5` | 每回合最多给几个项目候选 |
+| `head_resolve` | `true` | 命中被取代的旧事件时，是否沿 `改变` 追到同一条取值的最新值 |
+| `head_max_hops` | `3` | 追「当前值」最多几跳；还有后继就走不完 → 不宣称当前 |
+| `head_min_cos` | `0.72` | 每跳要求 cos ≥ 这个值（同一个东西换了值）；不够就停 |
 
 ## 看当前生效值
 

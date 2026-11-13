@@ -111,6 +111,12 @@ class RecallPolicy:
     neighbour_cap: int = 30
     neighbour_depth_max: int = 3
     project_hint_limit: int = 5
+    #: 当前状态解析：命中一条被取代的旧事件时，沿 改变 一路走到同一条取值的最新值。
+    #: 只走**唯一后继**，每步要求 cos ≥ head_min_cos（同一个东西换了值），最多 head_max_hops 跳；
+    #: 任何一步不满足就停在原地（行为退回「只给一跳」）。
+    head_resolve: bool = True
+    head_max_hops: int = 3
+    head_min_cos: float = 0.72
 
 
 @dataclass(frozen=True)
@@ -222,6 +228,9 @@ def _validate(policy: Any, name: str, warn) -> None:
         bad = [r for r in policy.neighbour_rels if r not in RELS]
         if bad:
             warn(f"{name}.neighbour_rels 含非法 rel {bad}；用默认值")
+            return False
+        if policy.head_max_hops < 0 or not 0.0 <= policy.head_min_cos <= 1.0:
+            warn(f"{name}.head_max_hops 必须 ≥0、head_min_cos 必须在 0–1；用默认值")
             return False
     if isinstance(policy, DecisionPolicy):
         if policy.timeout <= 0 or policy.probe_timeout <= 0:

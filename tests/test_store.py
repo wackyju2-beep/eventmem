@@ -677,6 +677,56 @@ def test_edit_can_carry_a_fresh_vector(store: Store) -> None:
     assert store.get_event(eid)["vec"] == b"\x00\x00\x00?" * 2, "传了 vec 就写进去"
 
 
+@case
+def test_resolve_head_walks_only_unambiguous_improvements(store: Store) -> None:
+    """当前值解析：唯一后继 + 同对象（cos）才走，分叉/换主题/超跳都停。"""
+    import struct
+
+    def vec(*values):
+        return struct.pack("<%df" % len(values), *values)
+
+    store.add_project("小主机")
+    a = store.add_event("决定", "系统盘 256G", ts=100.0, project="小主机", vec=vec(1, 0, 0))
+    b = store.add_event("变更", "系统盘换 1T", ts=200.0, project="小主机", vec=vec(0.98, 0.1, 0))
+    c = store.add_event("变更", "系统盘换 2T", ts=300.0, project="小主机", vec=vec(0.97, 0.15, 0))
+    store.add_edge(b, a, "改变", 0.9, "jev")
+    store.add_edge(c, b, "改变", 0.9, "jev")
+
+    got = store.resolve_head(a, max_hops=3, min_cos=0.9)
+    assert got and got["hops"] == 2 and got["event"]["id"] == c, got
+
+    # 分叉：两条后继 → 停
+    d = store.add_event("变更", "系统盘换 512G", ts=250.0, project="小主机", vec=vec(0.95, 0, 0.1))
+    store.add_edge(d, b, "改变", 0.9, "jev")
+    assert store.resolve_head(a, max_hops=3, min_cos=0.9) is None, "分叉时必须放弃"
+
+    # 换主题（cos 太低）→ 停；跳数上限 → 停在第 N 跳
+    store._db.execute("DELETE FROM edges WHERE src = ?", (d,))
+    store._db.commit()
+    e = store.add_event("变更", "把 cron pause 了", ts=400.0, project="小主机", vec=vec(0, 1, 0))
+    store.add_edge(e, c, "改变", 0.9, "jev")
+    got = store.resolve_head(a, max_hops=3, min_cos=0.9)
+    assert got and got["hops"] == 2 and got["event"]["id"] == c, \
+        "低 cos 的后继不该被当成当前值: %r" % (got,)
+    assert store.resolve_head(a, max_hops=2, min_cos=0.9) is None, \
+        "还有后继但没额度时不能把中间态宣称成当前值"
+
+    # 否定不算「值」：不跟
+    f = store.add_event("结果", "不再用系统盘方案", ts=500.0, project="小主机", vec=vec(0.9, 0, 0))
+    store.add_edge(f, e, "否定", 0.9, "jev")
+    assert store.resolve_head(e, max_hops=3, min_cos=0.0) is None, "否定不该被追成新值"
+
+
+@case
+def test_clear_edges_only_touches_edges(store: Store) -> None:
+    a = store.add_event("结果", "一")
+    b = store.add_event("结果", "二", ts=time.time() + 60)
+    store.add_edge(b, a, "重复", 0.9, "jev")
+    assert store.clear_edges() == 1
+    assert store._db.execute("select count(*) from edges").fetchone()[0] == 0
+    assert store._db.execute("select count(*) from events").fetchone()[0] == 2, "事件不能动"
+
+
 # ------------------------------------------------------------------------------- schema
 
 @case

@@ -418,6 +418,9 @@ function Overview({ ctx }) {
   const running = Boolean(status && status.live)
   const [clearing, setClearing] = useState(false)
   const [clearError, setClearError] = useState('')
+  const [armed, setArmed] = useState(false)
+  const [edgeBusy, setEdgeBusy] = useState(false)
+  const [edgeMsg, setEdgeMsg] = useState('')
 
   useEffect(() => {
     setEvery(running ? OVERVIEW_EVERY_LIVE : OVERVIEW_EVERY)
@@ -444,6 +447,24 @@ function Overview({ ctx }) {
       setClearError(msg(e))
     } finally {
       setClearing(false)
+    }
+  }
+
+  /* 清空连边：边 + 已判过的对一起删、游标归零，下一轮从最早的事件重新判。
+     只删边是没用的——判过的对留在 pair_evals 里，重跑会把它们全跳过。 */
+  const wipeEdges = async () => {
+    if (!armed) { setArmed(true); setEdgeMsg(''); return }
+    setEdgeBusy(true)
+    setArmed(false)
+    setEdgeMsg('')
+    try {
+      const r = await ctx.rest('/api/edges/clear', { method: 'POST', body: {} })
+      setEdgeMsg(fmt('已清空：{0} 条边、{1} 对判定记录；游标归零，下一轮从头重判', r.edges, r.pairs))
+      await reload()
+    } catch (e) {
+      setEdgeMsg(msg(e))
+    } finally {
+      setEdgeBusy(false)
     }
   }
 
@@ -559,6 +580,31 @@ function Overview({ ctx }) {
               )
             )
           : jsx('div', { className: 'emg-sub', children: t('这一进程还没跑过 pass') })
+      }),
+
+      jsx(Card, {
+        title: t('连边数据'),
+        children: [
+          jsx('div', {
+            className: 'emg-sub',
+            style: { marginBottom: 8 },
+            children: t('清空会删掉全部边和「判过的对」并把游标归零：下一轮 pass 从最早的事件重新判。只删边没用——判过的对留在 pair_evals 里，重跑会全部跳过。')
+          }),
+          jsxs('div', {
+            className: 'emg-row',
+            children: [
+              jsx(Btn, {
+                tiny: true,
+                danger: true,
+                disabled: edgeBusy || running,
+                onClick: wipeEdges,
+                children: edgeBusy ? t('清空中…') : armed ? t('再点一次确认清空') : t('清空连边并重跑')
+              }),
+              running ? jsx('span', { className: 'emg-sub', children: t('本轮还在跑，先停止') }) : null,
+              edgeMsg ? jsx('span', { className: 'emg-sub', children: edgeMsg }) : null
+            ]
+          })
+        ]
       }),
 
       jsx(Card, {

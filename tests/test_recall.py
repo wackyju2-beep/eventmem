@@ -184,6 +184,28 @@ class FakeStore:
             frontier = nxt
         return [dict(self.events[i]) for i in sorted(seen, key=lambda i: (self.events[i]["ts"], i))]
 
+    def resolve_head(self, eid, max_hops=3, min_cos=0.0, rels=("改变",)):
+        """与真实 Store 同语义：只跟 改变、每步唯一后继、跳数上限（fake 不算 cos）。"""
+        eid = int(eid)
+        cur = self.events.get(eid)
+        if cur is None:
+            return None
+        hops = 0
+        seen = {eid}
+        while hops < max(0, int(max_hops)):
+            nxt = sorted({edge["src"] for edge in self.edges
+                          if edge["dst"] == int(cur["id"]) and edge["rel"] in rels}
+                         - seen)
+            if len(nxt) != 1:
+                break
+            cand = self.events.get(nxt[0])
+            if cand is None or (cand["ts"], cand["id"]) <= (cur["ts"], cur["id"]):
+                break
+            cur = cand
+            seen.add(int(cand["id"]))
+            hops += 1
+        return {"event": dict(cur), "hops": hops} if hops else None
+
     def edges_into(self, eid):
         return [dict(edge) for edge in self.edges if edge["dst"] == int(eid)]
 
@@ -335,6 +357,40 @@ def test_chain_old_event_marked_superseded():
     # 命中新端：链必须把旧值带出来，"以前是 256G"才拼得出来
     out_new = recall(store, None, "NVMe", budget_tokens=400)
     assert "#10" in out_new and "#20" in out_new, "命中新事件时链没有带出旧值:\n" + out_new
+
+
+@test
+def test_current_state_resolution_skips_the_middle_hop():
+    """256G→1T→2T：命中 256G 时，块里要给 2T（当前），不要中间那个 1T。"""
+    store = FakeStore()
+    store.add(10, ts(2026, 9, 1), "决定", "系统盘 256G，根分区只用了一半", project="小主机")
+    store.add(20, ts(2026, 9, 20), "变更", "把系统盘换成 1T 的 NVMe", project="小主机")
+    store.add(30, ts(2026, 10, 30), "变更", "又把系统盘换成 2T，克隆后启动正常", project="小主机")
+    store.add_edge(20, 10, "改变")
+    store.add_edge(30, 20, "改变")
+    store.fts_override["zzzqqq"] = [(10, 5.0)]
+    out = recall(store, None, "zzzqqq", budget_tokens=600)
+    assert "#10" in out and "#30" in out, "旧值或当前值没进块：\n" + out
+    assert "#20" not in out, "中间那一跳不该出现：\n" + out
+    line30 = next(line for line in out.split("\n") if "#30" in line)
+    assert "当前" in line30, line30
+    line10 = next(line for line in out.split("\n") if "#10" in line)
+    assert "已失效" in line10, line10
+
+
+@test
+def test_current_state_resolution_stops_on_a_branch():
+    """两条后继 = 不知道哪条是当前值：退回只给一跳，不乱猜。"""
+    store = FakeStore()
+    store.add(10, ts(2026, 9, 1), "决定", "系统盘 256G", project="小主机")
+    store.add(20, ts(2026, 9, 20), "变更", "换成 1T", project="小主机")
+    store.add(25, ts(2026, 9, 21), "变更", "换成 512G", project="小主机")
+    store.add_edge(20, 10, "改变")
+    store.add_edge(25, 10, "改变")
+    store.fts_override["zzzqqq"] = [(10, 5.0)]
+    out = recall(store, None, "zzzqqq", budget_tokens=600)
+    assert "当前" not in out, "分叉时不该标当前：\n" + out
+    assert "#10" in out and ("#20" in out or "#25" in out), out
 
 
 @test

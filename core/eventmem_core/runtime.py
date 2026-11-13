@@ -219,7 +219,11 @@ def start(
     deadline = time.time() + float(timeout)
     while time.time() < deadline:
         if process.poll() is not None:
-            break
+            # A launcher that exits can never become healthy — say why instead of waiting
+            # out the whole timeout (a VRAM gate that refused to start lands here).
+            code = process.returncode
+            stop(pack)
+            raise RuntimeError(f"{pack.name}: 启动脚本退出（exit {code}），日志 {log_path}")
         if probe():
             return state
         time.sleep(0.5)

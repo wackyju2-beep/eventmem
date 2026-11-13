@@ -79,6 +79,11 @@ def invalid_mark(stamp: str, rel: str) -> str:
     return tr("已失效·被%s否定" % stamp, "negated by %s" % stamp)
 
 
+def current_mark() -> str:
+    """``当前`` — the mark on the value recall resolved as the latest one for that slot."""
+    return tr("当前", "current")
+
+
 @dataclass
 class RecallState:
     """跨轮召回状态，每会话一份。
@@ -239,13 +244,61 @@ def recall(store, encoder, query: str, *, policy: "RecallPolicy | None" = None,
         return True
 
     new_hits = [eid for eid in order if eid not in shown and eid not in skeleton_ids]
+    resolved: set[int] = set()
+
+    def resolve_current(seed_ev: dict) -> "dict | None":
+        """Old hit → walk 改变 to the latest value of the same slot; add only that one.
+
+        关系浏览仍然只展开一跳（``pull_chain``）；这里只回答「现在是多少」。走不动
+        （分叉 / cos 太低 / 超过跳数）就返回 None，行为与加这个功能之前完全一样。
+        """
+        try:
+            seed = int(seed_ev["id"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if seed in resolved:
+            return None
+        resolved.add(seed)
+        if not pol.head_resolve:
+            return None
+        fn = getattr(store, "resolve_head", None)
+        if not callable(fn):
+            return None
+        try:
+            info = fn(seed, max_hops=pol.head_max_hops, min_cos=pol.head_min_cos)
+        except Exception:  # noqa: BLE001 - resolution is an extra, never a failure
+            return None
+        head = info.get("event") if isinstance(info, dict) else None
+        if not isinstance(head, dict) or head.get("id") is None:
+            return None
+        try:
+            hid = int(head["id"])
+        except (TypeError, ValueError):
+            return None
+        if hid == seed or hid in seen:
+            return None
+        marks[hid] = current_mark()
+        return head if want(head) else None
+
+    def newer(ev: Any, than: dict) -> bool:
+        try:
+            return (float(ev.get("ts") or 0.0), int(ev.get("id") or 0)) > (
+                float(than.get("ts") or 0.0), int(than.get("id") or 0))
+        except (AttributeError, TypeError, ValueError):
+            return False
+
     for eid in order:
         if eid in skeleton_ids:
             continue
         if want(events[eid]):
             if not new_hits:
                 continue
-            for member in pull_chain(eid):
+            members = pull_chain(eid)          # 先算失效标记，再决定「当前值」
+            head = resolve_current(events[eid]) if marks.get(eid) else None
+            for member in members:
+                # 已经知道末端时不再把中间那一跳塞进来（256G→1T→2T 只给 256G 和 2T）。
+                if head is not None and newer(member, events[eid]):
+                    continue
                 want(member)
 
     # ③ 第三优先：预算还有剩，再放**新命中**事件的同会话前后各 2 条。

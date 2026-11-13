@@ -60,6 +60,18 @@ EN: dict[str, str] = {
     "输出无法解析": "unparsable output",
     "清除": "Clear",
     "清除中…": "Clearing…",
+    # ---- 连边数据（批量清空） ---------------------------------------------
+    "连边数据": "Edge data",
+    "清空会删掉全部边和「判过的对」并把游标归零：下一轮 pass 从最早的事件重新判。只删边没用——判过的对留在 pair_evals 里，重跑会全部跳过。":
+        "Clearing deletes every edge and the evaluated-pairs ledger, then resets the cursor: "
+        "the next pass re-judges from the oldest event. Deleting edges alone rebuilds "
+        "nothing — the ledger lives in pair_evals and the pass would skip every pair.",
+    "清空连边并重跑": "Clear edges & re-run",
+    "再点一次确认清空": "Click again to confirm",
+    "清空中…": "Clearing…",
+    "已清空：{0} 条边、{1} 对判定记录；游标归零，下一轮从头重判":
+        "Cleared {0} edges and {1} pair records; cursor reset, the next pass starts over",
+    "本轮还在跑，先停止": "A pass is running — stop it first",
     # ---- live strip -------------------------------------------------------
     "正在使用": "Using",
     "对": "pairs",

@@ -259,23 +259,25 @@ def test_decision_questions_switch_and_answers_map_back():
                                                nightly.AXIS_TEXT_EN, nightly.AXIS_OPTIONS)
         check_eq(key, "axis", "question key is stable")
         check_eq(text, nightly.AXIS_TEXT, "zh question text")
-        check_eq(list(options), ["重复", "改变", "否定"], "zh option labels")
+        check_eq(list(options), ["重复", "改变", "否定", "都不是"], "zh option labels")
     with lang_of("en"):
         _key, text, options = nightly._question(nightly.AXIS_KEY, nightly.AXIS_TEXT,
                                                 nightly.AXIS_TEXT_EN, nightly.AXIS_OPTIONS)
         check_eq(text, nightly.AXIS_TEXT_EN, "en question text")
-        check_eq(list(options), ["repeat", "change", "negate"], "en option labels")
+        check_eq(list(options), ["repeat", "change", "negate", "none"], "en option labels")
         _k, _t, detail = nightly._question(nightly.DETAIL_KEY, nightly.DETAIL_TEXT,
                                            nightly.DETAIL_TEXT_EN, nightly.DETAIL_OPTIONS)
         check_eq(list(detail), ["because", "refine"], "en detail labels")
         check("why" in " ".join(detail.values()), "en definitions explain the criterion")
         # 英文标签的答案必须落回中文存储值
-        answer = {"choice": "change", "probabilities": {"repeat": 0.1, "change": 0.7, "negate": 0.2},
+        answer = {"choice": "change", "probabilities": {"repeat": 0.1, "change": 0.7,
+                                                        "negate": 0.1, "none": 0.1},
                   "none": 0.05}
         back = nightly._canonical_answer(answer)
         assert isinstance(back, dict)
         check_eq(back["choice"], "改变", "choice mapped back")
-        check_eq(set(back["probabilities"]), {"重复", "改变", "否定"}, "probabilities mapped back")
+        check_eq(set(back["probabilities"]), {"重复", "改变", "否定", "都不是"},
+                 "probabilities mapped back")
         check_eq(back["none"], 0.05, "none probability untouched")
     # zh 模式下是恒等映射
     with lang_of("zh"):

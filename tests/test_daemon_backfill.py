@@ -66,7 +66,7 @@ class BackfillAPI(unittest.TestCase):
                 self.calls += 1
                 entered.set()
                 if not release.wait(5): raise RuntimeError('test timed out')
-                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0}, 'none': .1},
+                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0, '都不是': .1}, 'none': 0.0},
                         {'probabilities': {'因为': 0, '细化': 0.0}, 'none': 1.0}]
         client = Client()
         original = daemon_mod.W.from_settings
@@ -146,7 +146,7 @@ class BackfillAPI(unittest.TestCase):
                 if self.calls == 2:
                     entered.set()
                     if not release.wait(5): raise RuntimeError('test timed out')
-                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0}, 'none': .1},
+                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0, '都不是': .1}, 'none': 0.0},
                         {'probabilities': {'因为': 0, '细化': 0.0}, 'none': 1.0}]
         original = daemon_mod.W.from_settings
         daemon_mod.W.from_settings = lambda *a, **k: Client()
@@ -166,7 +166,7 @@ class BackfillAPI(unittest.TestCase):
             active_name = 'fake'
             def available(self): return True
             def decide_choice(self, state, questions):
-                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0}, 'none': .1},
+                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0, '都不是': .1}, 'none': 0.0},
                         {'probabilities': {'因为': 0, '细化': 0.0}, 'none': 1.0}]
         self.d.settings = replace(self.d.settings, edges=replace(self.d.settings.edges, min_conf_change=.95))
         original = daemon_mod.W.from_settings

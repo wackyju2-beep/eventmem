@@ -118,6 +118,9 @@ class Daemon:
         #: skips them for COOLDOWN seconds so the chain degrades instead of stalling on a
         #: server that is up but will not serve the model.
         self._down: dict[str, float] = {}
+        #: Packs this daemon started for the current pass (``release_after_pass`` stops them
+        #: when the pass ends, so a GPU backend does not sit on the card between rounds).
+        self._auto_started: list[Pack] = []
         self.logs: collections.deque = collections.deque(maxlen=400)
         _log_target = logging.getLogger("eventmem_core")
         _log_target.addHandler(_RingHandler(self.logs))
@@ -147,14 +150,31 @@ class Daemon:
 
     def prepare(self, _settings: CoreSettings) -> None:
         """Called by the pass, only when there is work: start what is down."""
+        self._auto_started = []
         for pack in self.supervised():
             state = runtime.status(pack)
             if state["running"]:
                 continue
             try:
-                runtime.start(pack)
+                runtime.start(pack, probe=_probe_of(pack))
+                self._auto_started.append(pack)
             except Exception as exc:  # noqa: BLE001 - a backend that will not start is skipped
                 _log.warning("eventmem daemon: %s", exc)
+
+    def release(self) -> None:
+        """Stop the packs this pass started that asked to be released (VRAM back to the user).
+
+        Only what *we* started in this pass: a backend the operator launched by hand stays up.
+        """
+        for pack in getattr(self, "_auto_started", ()):
+            if not getattr(pack, "release_after_pass", False):
+                continue
+            try:
+                stopped = runtime.stop(pack)
+                _log.info("eventmem daemon: released %s (stopped=%s)", pack.name, stopped)
+            except Exception as exc:  # noqa: BLE001 - a stuck stop must not kill the daemon
+                _log.warning("eventmem daemon: release %s failed (%s)", pack.name, exc)
+        self._auto_started = []
 
     # ------------------------------------------------------------------ passes
 
@@ -185,6 +205,7 @@ class Daemon:
             result = {"skipped": "error", "error": f"{type(exc).__name__}: {exc}"}
         finally:
             self._live = None
+            self.release()          # 一轮跑完就把 GPU 让回去（只停这一轮自己拉起的 pack）
             self._pass_lock.release()
         backend = str(result.get("backend") or "")
         if backend:
@@ -328,6 +349,35 @@ class Daemon:
                 conn.close()
         except Exception as exc:  # noqa: BLE001 - the page must render even if the db is busy
             return {**empty, "error": str(exc)}
+
+    def clear_edges(self) -> tuple[int, dict[str, Any]]:
+        """Wipe the edge graph **and** the pair ledger, then reset the cursor.
+
+        Deleting ``edges`` alone would rebuild nothing: the nightly pass skips any pair it
+        has already evaluated, and that ledger is ``pair_evals``.  Manual deletions
+        (``edge_deletions``) stay — those are the operator's decisions, not model output.
+        """
+        if self._pass_lock.locked():
+            return 409, {"error": "本轮还在跑，先 POST /api/stop 再清空"}
+        path = self.settings.db_path
+        if not path or not os.path.exists(path):
+            return 200, {"ok": True, "edges": 0, "pairs": 0, "cursor": 0}
+        try:
+            conn = sqlite3.connect(path, timeout=10.0)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                edges = int(conn.execute("DELETE FROM edges").rowcount or 0)
+                pairs = int(conn.execute("DELETE FROM pair_evals").rowcount or 0)
+                conn.execute(
+                    "INSERT INTO meta(key, value) VALUES('nightly_since_ts', '0') "
+                    "ON CONFLICT(key) DO UPDATE SET value = '0'")
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            return 503, {"error": f"清空失败：{exc}"}
+        _log.info("eventmem daemon: cleared %d edges + %d pair evals; cursor reset", edges, pairs)
+        return 200, {"ok": True, "edges": edges, "pairs": pairs, "cursor": 0}
 
     def clear_notices(self) -> tuple[int, dict[str, Any]]:
         """Clear the extraction-failure notices (the operator fixed the model)."""
@@ -749,6 +799,8 @@ class Daemon:
             return 200, self.stats()
         if method == "POST" and tail == ["notices", "clear"]:
             return self.clear_notices()
+        if method == "POST" and tail == ["edges", "clear"]:
+            return self.clear_edges()
         if method == "GET" and tail == ["logs"]:
             return 200, {"logs": list(self.logs)}
         if method == "GET" and tail == ["config"]:

@@ -56,6 +56,7 @@ import time
 from typing import Callable, Optional
 
 from .i18n import is_zh  # noqa: E402
+from .providers import NONE_OF_ABOVE  # noqa: E402
 from .settings import CoreSettings, EdgePolicy, describe  # noqa: E402
 
 _log = logging.getLogger(__name__)
@@ -83,15 +84,27 @@ __all__ = [
 AXIS_KEY = "axis"
 AXIS_TEXT = "后一条相对前一条是什么关系？"
 AXIS_TEXT_EN = "What is the later event's relation to the earlier one?"
+#: The "none of the above" option is sent as a **real label**.  It used to be left to the
+#: server (``allow_none``), which only works where the server implements it: LM Studio's
+#: systemone has no ``none_probability``, so 改变 was the only thing left to pick and the graph
+#: turned into one 356-node blob.  A real label makes every backend behave the same.
+NONE_LABEL = NONE_OF_ABOVE
 AXIS_OPTIONS = (
     ("重复", "repeat", "语义等价，同一件事换种说法，未引入实质性新变化",
      "Same meaning, reworded; nothing substantively new"),
-    ("改变", "change", "状态或数值替换（仅更新了具体的参数、对象、配置或条件，并非全盘推翻废止原行为）",
-     "Replaces a state or value (parameters, objects, config or conditions are updated; the earlier "
-     "behaviour is not abolished or reversed)"),
+    ("改变", "change",
+     "同一个对象的同一条取值被替换：前一条点名的参数/开关/版本/数量/路径/配置项，后一条给出了它的新值"
+     "（「系统盘 256G」→「系统盘换成 1T」）。必须能指出被替换的是哪一条具体取值",
+     "Replaces one specific value of the same object: the parameter, flag, version, count, "
+     "path or config item named by the earlier event gets a new value (\"system disk 256G\" "
+     "→ \"system disk now 1T\"). You must be able to name which single value was replaced"),
     ("否定", "negate", "方向性推翻或废止（明确表达不再执行、禁止或推翻前一条的做法，且没有给出同类平替参数）",
      "Reverses or repeals the earlier behaviour (it is no longer done, or it is forbidden or "
      "overturned) and offers no like-for-like replacement"),
+    (NONE_LABEL, "none",
+     "后一条没有替换前一条里的任何取值：两条讲的是不同的事/不同对象，或只是先后做的两件不相干的活",
+     "The later event does not replace any value named by the earlier one: they are about "
+     "different things or objects, or are two unrelated pieces of work"),
 )
 
 #: Question 2 — the elaboration axis.  Independent of question 1, so a pair can
@@ -138,7 +151,10 @@ MAX_FAIL_STREAK = _POLICY.max_fail_streak
 #: Meta key holding the timestamp the next run starts from.
 CURSOR_KEY = "nightly_since_ts"
 
-_AXIS_RELS = tuple(rel for rel, *_rest in AXIS_OPTIONS)
+_AXIS_RELS = tuple(rel for rel, *_rest in AXIS_OPTIONS if rel != NONE_LABEL)
+#: What one axis answer actually carries on the wire: the three relations **and** the
+#: real "none" label (the question is sent with ``allow_none: false``).
+_AXIS_WIRE = _AXIS_RELS + (NONE_LABEL,)
 _DETAIL_RELS = tuple(rel for rel, *_rest in DETAIL_OPTIONS)
 
 #: English label -> canonical (stored) label, for answers that come back in English.
@@ -169,7 +185,6 @@ def _canonical_answer(answer: object) -> object:
     if isinstance(probs, dict) and any(k in _LABEL_BACK for k in probs):
         out["probabilities"] = {_LABEL_BACK.get(k, k): v for k, v in probs.items()}
     return out
-NONE_LABEL = "都不是"
 
 
 # --------------------------------------------------------------------------- #
@@ -833,6 +848,13 @@ def _dist(answer, labels: tuple[str, ...]) -> dict | None:
         dist[NONE_LABEL] = float(answer.get("none") or 0.0)
     except (TypeError, ValueError):
         dist[NONE_LABEL] = 0.0
+    # 4 标签的 axis 问法把「都不是」当**真标签**发下去（服务端的 allow_none 关掉），
+    # 这时候它的概率在 probabilities 里；answer["none"] 只是壳（0.0），别拿它盖掉真值。
+    if isinstance(raw.get(NONE_LABEL), (int, float)):
+        try:
+            dist[NONE_LABEL] = float(raw[NONE_LABEL])
+        except (TypeError, ValueError):
+            pass
     return dist
 
 

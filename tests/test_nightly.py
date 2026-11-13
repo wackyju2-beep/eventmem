@@ -276,17 +276,27 @@ class FakeJev:
                 else:
                     value = self.values.get(short, self.default)
                 probs[label] = float(value)
-            best = max(probs, key=probs.get) if probs else None
-            top = probs.get(best, 0.0) if best is not None else 0.0
             none = float(self.none_values.get(key, 0.0))
-            # 「都不是」赢了时真实服务返回 choice=null；这里用 none 概率模拟。
-            abstain = top <= 0.0 or none > top
+            if "都不是" in criteria:
+                # 4 标签问法：都不是 是**真标签**，服务端不再回 none_probability。
+                probs["都不是"] = max(probs.get("都不是", 0.0), none)
+                none = 0.0
+                best = max(probs, key=probs.get)
+                top = probs[best]
+                abstain = best == "都不是" or top <= 0.0
+                reported_none = 0.0
+            else:
+                best = max(probs, key=probs.get) if probs else None
+                top = probs.get(best, 0.0) if best is not None else 0.0
+                # 「都不是」赢了时真实服务返回 choice=null；这里用 none 概率模拟。
+                abstain = top <= 0.0 or none > top
+                reported_none = max(none, top) if abstain else none
             out.append(
                 {
                     "choice": None if abstain else best,
                     "confidence": 0.0 if abstain else top,
                     "probabilities": probs,
-                    "none": max(none, top) if abstain else none,
+                    "none": reported_none,
                 }
             )
         return out

@@ -27,8 +27,10 @@ re-entrant lock: Hermes prefetches on a worker thread while the agent thread wri
 
 from __future__ import annotations
 
+import array
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -106,6 +108,28 @@ def _is_newer(a: dict, b: dict) -> bool:
     """True when event ``a`` is strictly later than event ``b`` (ts, then id)."""
     return (float(a.get("ts") or 0.0), int(a.get("id") or 0)) > (
         float(b.get("ts") or 0.0), int(b.get("id") or 0))
+
+
+def _unit_vector(raw: Any) -> Optional[list[float]]:
+    """``events.vec`` (float32 blob) as a unit vector; ``None`` when absent/unusable."""
+    if not raw:
+        return None
+    try:
+        values = array.array("f")
+        values.frombytes(bytes(raw))
+    except (TypeError, ValueError):
+        return None
+    norm = math.sqrt(sum(v * v for v in values))
+    if not norm or not math.isfinite(norm):
+        return None
+    return [v / norm for v in values]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine of two unit vectors (0.0 when the dimensions do not match)."""
+    if len(a) != len(b):
+        return 0.0
+    return float(sum(x * y for x, y in zip(a, b)))
 
 
 def _as_bytes(vec: Any) -> Optional[bytes]:
@@ -679,6 +703,66 @@ class Store:
             except Exception:
                 db.rollback()
                 raise
+
+    # ------------------------------------------------ 当前状态解析（v10 之后）
+
+    def resolve_head(self, eid: int, *, max_hops: int = 3, min_cos: float = 0.0,
+                     rels: Sequence[str] = (REL_CHANGE,)) -> Optional[dict]:
+        """Follow 改变 successors to the current value of the same slot.
+
+        Only 改变 (a 否定 offers no replacement, so it is not a value to walk to), only a
+        **single** successor per step (two successors = we cannot tell which branch is the
+        value), and only while the two events look like the same thing (``cos >= min_cos``).
+        Returns ``{"event", "hops"}`` when the walk moved at least one hop, else ``None`` —
+        a refused walk must leave the caller on exactly the behaviour it had before.
+
+        This is deliberately *not* transitive closure: in the production graph 改变/否定 is
+        one 356-node blob, and walking it returns "whatever happened last", which is worse
+        than the one hop recall already gives.
+        """
+        rels = tuple(r for r in (rels or ()) if r in RELS) or (REL_CHANGE,)
+        with self._lock:
+            cur = self.get_event(int(eid))
+            if not cur:
+                return None
+            hops = 0
+            seen = {int(cur["id"])}
+            cur_vec = _unit_vector(cur.get("vec"))
+            cap = max(0, int(max_hops))
+            while True:
+                rows = self._db.execute(
+                    "SELECT g.src FROM edges g JOIN events s ON s.id = g.src "
+                    "JOIN events d ON d.id = g.dst "
+                    f"WHERE g.dst = ? AND g.rel IN ({_placeholders(len(rels))}) "
+                    "AND (s.ts > d.ts OR (s.ts = d.ts AND s.id > d.id))",
+                    (int(cur["id"]), *rels),
+                ).fetchall()
+                nxt = sorted({int(r[0]) for r in rows} - seen)
+                if not nxt:
+                    break                  # 没有后继：这就是当前值
+                if len(nxt) != 1:
+                    return None            # 分叉：不知道哪条是当前值，什么都不宣称
+                if hops >= cap:
+                    return None            # 还没走到尽头：可能是中间态，不宣称
+                cand = self.get_event(nxt[0])
+                if not cand or not _is_newer(cand, cur):
+                    break
+                cand_vec = _unit_vector(cand.get("vec"))
+                if min_cos and cur_vec and cand_vec and _cosine(cur_vec, cand_vec) < float(min_cos):
+                    break                  # 换了别的东西，不是同一个取值 → 停在这里
+                cur, cur_vec = cand, cand_vec
+                seen.add(int(cand["id"]))
+                hops += 1
+            if hops == 0:
+                return None
+            return {"event": cur, "hops": hops}
+
+    def clear_edges(self) -> int:
+        """Delete every edge (the graph's bulk "start over").  Tombstones are untouched."""
+        with self._lock:
+            cur = self._db.execute("DELETE FROM edges")
+            self._db.commit()
+        return int(cur.rowcount or 0)
 
     # ------------------------------------------------ 回合抽取失败（v10）
 

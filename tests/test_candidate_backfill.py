@@ -21,8 +21,10 @@ class Jev:
 
     def decide_choice(self, state, questions):
         self.calls.append(state)
-        return [{'probabilities': {label: (0.9 if label == self.axis else 0.0)
-                                   for label in ('重复', '改变', '否定')}, 'none': 0.1},
+        probs = {label: 0.0 for label in ('重复', '改变', '否定', '都不是')}
+        probs[self.axis] = 0.9
+        probs['都不是'] = 0.1          # 4 个真标签，和必须为 1
+        return [{'probabilities': probs, 'none': 0.0},
                 {'probabilities': {'因为': 0.0, '细化': 0.0}, 'none': 1.0}]
 
 
@@ -38,9 +40,11 @@ class BackfillTests(unittest.TestCase):
         self.store.add_event('尝试', 'a', ts=1, session='s')
         self.store.add_event('尝试', 'b', ts=2, session='s')
         client = JevClient('http://localhost:18090')
+        # axis 现在是 4 个真标签（都不是 在 probabilities 里，服务端 allow_none 关掉）；
+        # detail 仍然靠服务端的 none_probability，所以这里两种尺度各覆盖一次。
         raw = {'answers': {
             'axis': {'choice': '改变', 'confidence': .8,
-                     'probabilities': {'重复': .1, '改变': .8, '否定': .1}, 'none_probability': .2},
+                     'probabilities': {'重复': .1, '改变': .8, '否定': .05, '都不是': .05}},
             'detail': {'choice': None, 'confidence': .8,
                        'probabilities': {'因为': .5, '细化': .5}, 'none_probability': .8}}}
         plan = preview(self.store)
@@ -51,7 +55,7 @@ class BackfillTests(unittest.TestCase):
         self.assertEqual((result['status'], result['pairs'], result['edges']), ('completed', 1, 1))
         edge = self.store._db.execute('SELECT rel,conf,probs FROM edges').fetchone()
         self.assertEqual(edge[0], '改变')
-        self.assertAlmostEqual(edge[1], .64)
+        self.assertAlmostEqual(edge[1], .8)
         self.assertEqual(json.loads(edge[2])['改变'], .8)
 
     def test_wire_parsers_reject_missing_invalid_and_boolean_probabilities(self):
@@ -223,7 +227,8 @@ class BackfillTests(unittest.TestCase):
         self.store._db.commit()
         class TwoHits(Jev):
             def decide_choice(self, state, questions):
-                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0}, 'none': .1},
+                return [{'probabilities': {'重复': 0, '改变': .9, '否定': 0, '都不是': .1},
+                         'none': 0.0},
                         {'probabilities': {'因为': 0, '细化': .9}, 'none': .1}]
         plan = preview(self.store)
         with self.assertRaisesRegex(RuntimeError, 'edge insert'):
@@ -473,8 +478,10 @@ class BackfillTests(unittest.TestCase):
         from eventmem_core import providers
         class Provider(Jev):
             def decide_choice(self, state, questions):
-                axis = _parse_systemone({'choice': 'change', 'probabilities': {'change': .9, 'repeat': 0, 'negate': 0},
-                                         'none_probability': .1}, ('change', 'repeat', 'negate'))
+                axis = _parse_systemone({'choice': 'change',
+                                         'probabilities': {'change': .9, 'repeat': 0,
+                                                           'negate': 0, 'none': .1}},
+                                        ('change', 'repeat', 'negate', 'none'))
                 detail = _parse_decisions({'type': 'choice', 'choice': None, 'probabilities': [
                     {'value': 'because', 'probability': 0}, {'value': 'refine', 'probability': 0},
                     {'value': providers.NONE_LABEL, 'probability': 1}]}, ('because', 'refine'))

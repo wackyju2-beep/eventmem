@@ -47,6 +47,11 @@ PROTOCOLS = ("systemone", "openai-decisions")
 #: from ``probabilities`` and reported as ``none``, exactly like ``none_probability``.
 NONE_LABEL = "none"
 
+#: The "none of the above" label we send as a **real option** when a question wants it
+#: (the axis question does — not every backend implements ``allow_none``).  Same word as
+#: :data:`eventmem_core.nightly.NONE_LABEL`.
+NONE_OF_ABOVE = "都不是"
+
 
 def _none_description() -> str:
     return tr(
@@ -101,7 +106,10 @@ def build_payload(
     payload_questions = []
     for key, text, criteria in items:
         choices = [{"value": label, "description": desc} for label, desc in criteria.items()]
-        choices.append({"value": NONE_LABEL, "description": _none_description()})
+        if NONE_OF_ABOVE not in criteria:
+            # OpenAI Decisions always gets its own none option; a question that already
+            # carries 「都不是」 as a real label would end up with two of them.
+            choices.append({"value": NONE_LABEL, "description": _none_description()})
         if not 2 <= len(choices) <= 255:
             raise ValueError(
                 f"question {key!r} offers {len(choices)} choices; OpenAI Decisions allows 2–255"
@@ -202,7 +210,13 @@ def _parse_systemone(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
 
     none = _clamp01(answer.get("none_probability", answer.get("none")))
     if none is None:
-        return None
+        # A server without allow_none (LM Studio) omits none_probability.  When the
+        # "none of the above" option is one of our own labels (「都不是」 or its English
+        # spelling) its probability is already inside ``probabilities``, so the missing
+        # field is not a defect — fall back to 0.0 instead of rejecting.
+        if NONE_OF_ABOVE not in labels and NONE_LABEL not in labels:
+            return None
+        none = 0.0
     result = _answer(choice, answer.get("confidence"), probabilities, none)
     if result is not None:
         scale = probability_scale(probabilities.values(), none)

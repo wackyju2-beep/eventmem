@@ -627,6 +627,47 @@ def test_extraction_failures_surface_on_the_overview_and_can_be_cleared():
 
 
 @case
+def test_clear_edges_wipes_edges_pairs_and_cursor():
+    """批量删边：边 + 判别账本一起删、游标归零，事件不动。"""
+    tmp = tempfile.mkdtemp(prefix="eventmem-clear-")
+    db = fresh_db()
+    try:
+        _home, packs_dir = home_with_packs(tmp)
+        store = Store(db)
+        try:
+            a = store.add_event("决定", "一")
+            b = store.add_event("结果", "二", ts=time.time() + 60)
+            store.add_edge(b, a, "因为", 0.9, "jev", probs={"因为": 0.9})
+            store.add_pair_eval(b, a,
+                                axis_probs={"重复": 0.0, "改变": 0.1, "否定": 0.1, "都不是": 0.8},
+                                detail_probs={"因为": 0.9, "细化": 0.1}, detail_label="因为")
+            store.set_meta("nightly_since_ts", "123.0")
+        finally:
+            store.close()
+        with Live(daemon_mod.Daemon(settings_for(db, packs_dir))) as live:
+            status, body = live.post("/api/edges/clear")
+            check_eq(status, 200, "POST edges/clear")
+            check_eq(body["edges"], 1, "one edge deleted")
+            check_eq(body["pairs"], 1, "one pair record deleted")
+        store = Store(db)
+        try:
+            check_eq(store._db.execute("select count(*) from edges").fetchone()[0], 0,
+                     "no edges left")
+            check_eq(store._db.execute("select count(*) from pair_evals").fetchone()[0], 0,
+                     "the evaluated-pairs ledger is what makes a replay possible")
+            check_eq(store.get_meta("nightly_since_ts"), "0", "cursor reset to the beginning")
+            check_eq(store._db.execute("select count(*) from events").fetchone()[0], 2,
+                     "events are untouched")
+        finally:
+            store.close()
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
+        Path(db).unlink(missing_ok=True)
+
+
+@case
 def test_logs_ring_and_bad_json():
     tmp = tempfile.mkdtemp(prefix="eventmem-logs-")
     db = fresh_db()

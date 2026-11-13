@@ -40,6 +40,7 @@ KINDS = ("self", "external", "remote")
 _KNOWN_KEYS = frozenset({
     "protocol", "model", "weights", "base_url", "external", "launch", "args", "port",
     "api_key_env", "api_key", "margin", "license", "note", "check_model",
+    "release_after_pass",
 })
 
 
@@ -70,6 +71,9 @@ class Pack:
     #: with JIT lists every model, loaded or not, so this catches a renamed weight up front
     #: instead of stalling every round on a model id the server does not know.
     check_model: bool = False
+    #: A ``self`` pack may hold the GPU hostage between passes.  With this on, the daemon
+    #: stops it again as soon as the pass that started it ends (weights back out of VRAM).
+    release_after_pass: bool = False
 
     @property
     def needs_key(self) -> bool:
@@ -102,6 +106,7 @@ class Pack:
             "margin": self.margin,
             "license": self.license,
             "check_model": self.check_model,
+            "release_after_pass": self.release_after_pass,
         }
 
 
@@ -159,13 +164,14 @@ def from_mapping(
 
     base_url = str(mapping.get("base_url") or "").strip().rstrip("/")
     weights = str(mapping.get("weights") or "").strip()
-    if base_url and weights:
-        raise PackError(f"{name}: weights 与 base_url 只能写一个（本地 or 远端）")
-    if not base_url and not weights:
-        raise PackError(f"{name}: 至少写 weights（本地）或 base_url（已装好的服务 / 云端）")
+    launch = str(mapping.get("launch") or "").strip()
+    if base_url and (weights or launch):
+        raise PackError(f"{name}: base_url 与 weights/launch 不能同时写（本地 or 远端）")
+    if not base_url and not weights and not launch:
+        raise PackError(f"{name}: 至少写 weights / launch（本地）或 base_url（已装好的服务 / 云端）")
 
     external = bool(mapping.get("external"))
-    if weights:
+    if weights or launch:
         kind = "self"
     elif external:
         kind = "external"
@@ -186,7 +192,6 @@ def from_mapping(
         candidate = Path(weights)
         weights = str(candidate if candidate.is_absolute() else (directory / candidate))
 
-    launch = str(mapping.get("launch") or "").strip()
     if kind != "self" and launch:
         raise PackError(f"{name}: 只有本地 pack 能写 launch（{kind} 不归我们启动）")
     if kind == "self" and not launch:
@@ -230,6 +235,7 @@ def from_mapping(
         license=str(mapping.get("license") or ""),
         note=str(mapping.get("note") or ""),
         check_model=check_model,
+        release_after_pass=bool(mapping.get("release_after_pass")),
     )
 
 

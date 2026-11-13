@@ -37,9 +37,10 @@ Which keys are present decides what the folder is:
 | `weights` | — | `self` only: a GGUF path, absolute or relative to the pack folder |
 | `base_url` | — | `external` / `remote`: the server root, e.g. `http://127.0.0.1:1234` |
 | `external` | `false` | marks a `base_url` as already running (we never start or stop it) |
-| `launch` | `auto` for `self` | the command to start the server; `auto` uses the `llama.cpp` this repo installed |
+| `launch` | `auto` for `self` | the command to start the server; `auto` uses the `llama.cpp` this repo installed. **A `self` pack may skip `weights` entirely and give only `launch`** — that is how a backend whose weights live on another machine is driven (a wrapper script that starts the remote server, gates on free VRAM, and runs the local engine) |
 | `args` | — | extra server args; `{port}`, `{weights}`, `{dir}` are substituted |
 | `port` | `0` | `self` only: `0` = pick a free port and record it in `.runtime.json` |
+| `release_after_pass` | `false` | `self` only: stop this pack again when the pass that started it ends (frees VRAM). Only packs the daemon started itself are stopped |
 | `api_key_env` | — | read the key from this environment variable (never stored in the file) |
 | `api_key` | — | the key itself, for local endpoints; `api_key_env` wins when both are set |
 | `margin` | `null` | 解析并显示，但 nightly 目前只用 `edges.margin`（按后端分阈值还没接进写边路径） |

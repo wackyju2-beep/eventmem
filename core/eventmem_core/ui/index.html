@@ -60,6 +60,15 @@
   </div>
 
   <div class="card" style="margin-top:14px">
+    <h2>连边数据</h2>
+    <div class="sub">清空会删掉全部边和「判过的对」并把游标归零：下一轮 pass 从最早的事件重新判。只删边没用——判过的对留在 pair_evals 里，重跑会全部跳过。</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn danger" id="edges-clear">清空连边并重跑</button>
+      <span class="sub" id="edges-msg"></span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
     <h2>后端链路（decision.backends）</h2>
     <div class="chainline" id="chain-overview"></div>
     <div class="hint">顺序即回退顺序：一轮开始时逐项探活，第一个活着的负责整轮。</div>

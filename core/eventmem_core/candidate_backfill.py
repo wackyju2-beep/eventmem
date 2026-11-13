@@ -306,7 +306,7 @@ def execute(store, jev, plan: Preview, *, token: str, policy: EdgePolicy | None 
                 answers = worker._decide_choices(old, event)
                 # An incomplete response cannot be recorded as a completed pair.
                 if (answers is None or len(answers) != 2 or
-                        not _valid_answer(answers[0], nightly._AXIS_RELS) or
+                        not _valid_answer(answers[0], nightly._AXIS_WIRE) or
                         not _valid_answer(answers[1], nightly._DETAIL_RELS)):
                     result['status'] = 'jev-error'
                     return result

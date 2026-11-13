@@ -157,6 +157,25 @@ $("notice-clear").onclick = async () => {
   }
 };
 
+/* 清空连边：边 + 已判过的对一起删、游标归零；只删边的话重跑会把每一对都跳过。 */
+$("edges-clear").onclick = async () => {
+  if (!window.confirm("删掉全部边和已判过的对，并让下一轮从头重判？这一步不可撤销。")) return;
+  const btn = $("edges-clear");
+  btn.disabled = true;
+  $("edges-msg").textContent = "清空中…";
+  try {
+    const r = await api("/api/edges/clear", {});
+    $("edges-msg").textContent =
+      `已清空 ${r.edges} 条边、${r.pairs} 对判定记录；游标归零，下一轮从头重判`;
+    refresh("overview");
+  } catch (e) {
+    $("edges-msg").textContent = "";
+    toast(e.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 /* ------------------------------------------------------------------ backends */
 
 const TEMPLATES = {
