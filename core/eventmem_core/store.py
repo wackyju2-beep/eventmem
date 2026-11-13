@@ -544,10 +544,141 @@ class Store:
         with self._lock:
             self._db.execute(
                 "INSERT OR IGNORE INTO edges(src, dst, rel, conf, decided_by, cross, probs, backend) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (int(src), int(dst), rel, float(conf), decided_by, int(cross), blob, str(backend)),
+                "SELECT ?,?,?,?,?,?,?,? WHERE ? != 'jev' OR NOT EXISTS "
+                "(SELECT 1 FROM edge_deletions WHERE src=? AND dst=?)",
+                (int(src), int(dst), rel, float(conf), decided_by, int(cross), blob, str(backend),
+                 decided_by, int(src), int(dst)),
             )
             self._db.commit()
+
+    def recalibrate(self, policy, *, token=None, historical_scale=None):
+        """Preview or atomically apply a snapshot. No model calls or schema changes.
+
+        A whole pair is skipped on incomplete distributions, missing/edited events, or any
+        human/other/manual edge. This prevents contradictory partial updates of either axis.
+        ``historical_scale='conditional'`` explicitly opts into interpreting complete
+        conditional-form archives; provenance is otherwise unknown. The option is bound
+        into the preview token. Original archive and edge distributions remain unchanged.
+        """
+        import hashlib
+        import math
+        from dataclasses import asdict
+        from .nightly import _accepted, _AXIS_RELS, _DETAIL_RELS, NONE_LABEL
+        from .providers import probability_scale
+        if historical_scale not in (None, 'conditional'):
+            raise ValueError('historical_scale must be None or conditional')
+
+        def distribution(raw, labels):
+            try:
+                obj = json.loads(raw)
+                if not isinstance(obj, dict) or set(obj) != set(labels) | {NONE_LABEL}:
+                    return None
+                if any(isinstance(v, bool) or not isinstance(v, (int, float)) or
+                       not math.isfinite(v) or v < 0 or v > 1 for v in obj.values()):
+                    return None
+                scale = probability_scale((obj[k] for k in labels), obj[NONE_LABEL])
+                if scale is None or (scale == 'conditional' and historical_scale != 'conditional'):
+                    return None
+                return obj
+            except (TypeError, ValueError):
+                return None
+
+        def answer(dist):
+            probs = {k: v for k, v in dist.items() if k != NONE_LABEL}
+            return {'probabilities': probs, 'none': dist[NONE_LABEL],
+                    'probability_scale': probability_scale(probs.values(), dist[NONE_LABEL])}
+
+        with self._lock:
+            db = self._db
+            db.execute('BEGIN IMMEDIATE' if token is not None else 'BEGIN')
+            try:
+                pairs = [dict(r) for r in db.execute('SELECT * FROM pair_evals ORDER BY src,dst')]
+                edges = [dict(r) for r in db.execute('SELECT * FROM edges ORDER BY src,dst,rel')]
+                deletions = [dict(r) for r in db.execute('SELECT * FROM edge_deletions ORDER BY src,dst,rel')]
+                events = [dict(r) for r in db.execute('SELECT id, project_id, edited_ts FROM events ORDER BY id')]
+                snapshot = {'pairs': pairs, 'edges': edges, 'deletions': deletions,
+                            'events': events, 'policy': asdict(policy),
+                            'historical_scale': historical_scale}
+                digest = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True,
+                                                     separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+                if token is not None and token != digest:
+                    raise ValueError('stale preview')
+                by_pair = {}
+                for edge in edges:
+                    by_pair.setdefault((edge['src'], edge['dst']), []).append(edge)
+                by_id = {e['id']: e for e in events}
+                added = {r: 0 for r in RELS}
+                removed = {r: 0 for r in RELS}
+                skipped = 0
+                deleted_pairs = {(d['src'], d['dst']) for d in deletions}
+                manual_deletion_pairs = 0
+                deletes, inserts, labels_update, conf_updates = [], [], [], []
+                for pair in pairs:
+                    src, dst = pair['src'], pair['dst']
+                    old = by_pair.get((src, dst), [])
+                    a, b = by_id.get(src), by_id.get(dst)
+                    axis = distribution(pair['axis_probs'], _AXIS_RELS)
+                    detail = distribution(pair['detail_probs'], _DETAIL_RELS)
+                    def matches_eval(edge):
+                        labels, expected = ((_AXIS_RELS, axis) if edge['rel'] in _AXIS_RELS
+                                            else (_DETAIL_RELS, detail))
+                        return distribution(edge['probs'], labels) == expected
+                    expected_old = {pair['axis_label']} if pair['axis_label'] else set()
+                    if pair['axis_label'] != '重复' and pair['detail_label']:
+                        expected_old.add(pair['detail_label'])
+                    if (src, dst) in deleted_pairs or (dst, src) in deleted_pairs:
+                        manual_deletion_pairs += 1
+                        skipped += 1
+                        continue
+                    if (not a or not b or a['edited_ts'] is not None or b['edited_ts'] is not None
+                            or axis is None or detail is None
+                            or not expected_old.issubset({e['rel'] for e in old}) or any(
+                                e['decided_by'] != 'jev' or e['edited_ts'] is not None
+                                or not matches_eval(e) for e in old)):
+                        skipped += 1
+                        continue
+                    axis_hit = _accepted(answer(axis), _AXIS_RELS, policy.margin, policy)
+                    detail_hit = None if axis_hit and axis_hit[0] == '重复' else _accepted(
+                        answer(detail), _DETAIL_RELS, policy.margin, policy)
+                    desired = {h[0]: h for h in (axis_hit, detail_hit) if h is not None}
+                    labels_update.append((axis_hit[0] if axis_hit else None,
+                                          detail_hit[0] if detail_hit else None, src, dst))
+                    existing = {e['rel']: e for e in old}
+                    for rel in existing.keys() & desired.keys():
+                        dist = axis if rel in _AXIS_RELS else detail
+                        if (historical_scale == 'conditional' and
+                                probability_scale((dist[k] for k in (_AXIS_RELS if rel in _AXIS_RELS else _DETAIL_RELS)),
+                                                  dist[NONE_LABEL]) == 'conditional' and
+                                existing[rel]['conf'] != desired[rel][1]):
+                            conf_updates.append((desired[rel][1], src, dst, rel))
+                    for rel in existing.keys() - desired.keys():
+                        removed[rel] += 1
+                        deletes.append((src, dst, rel))
+                    for rel in desired.keys() - existing.keys():
+                        hit = desired[rel]
+                        added[rel] += 1
+                        cross = int(a['project_id'] is not None and b['project_id'] is not None
+                                    and a['project_id'] != b['project_id'])
+                        inserts.append((src, dst, rel, hit[1], 'jev', cross,
+                                        json.dumps(hit[2], ensure_ascii=False, sort_keys=True), ''))
+                if token is not None:
+                    db.executemany('DELETE FROM edges WHERE src=? AND dst=? AND rel=?', deletes)
+                    db.executemany('INSERT INTO edges(src,dst,rel,conf,decided_by,cross,probs,backend) '
+                                   'VALUES(?,?,?,?,?,?,?,?)', inserts)
+                    db.executemany('UPDATE pair_evals SET axis_label=?, detail_label=? '
+                                   'WHERE src=? AND dst=?', labels_update)
+                    db.executemany('UPDATE edges SET conf=? WHERE src=? AND dst=? AND rel=?', conf_updates)
+                db.commit()
+                archived = {(p['src'], p['dst']) for p in pairs}
+                uncovered = sum(1 for e in edges if e['decided_by'] == 'jev'
+                                and (e['src'], e['dst']) not in archived)
+                return {'token': digest, 'added': added, 'removed': removed, 'skipped': skipped,
+                        'confidence_updates': len(conf_updates),
+                        'uncovered_jev_edges': uncovered, 'manual_deletion_pairs': manual_deletion_pairs,
+                        'legacy_deletions_unknown': True}
+            except Exception:
+                db.rollback()
+                raise
 
     # ------------------------------------------------ manual edits (可视化界面)
 
@@ -605,6 +736,11 @@ class Store:
         with self._lock:
             if old_rel and old_rel != rel:
                 self._db.execute(
+                    "INSERT OR REPLACE INTO edge_deletions(src,dst,rel,ts) "
+                    "SELECT src,dst,rel,? FROM edges WHERE src=? AND dst=? AND rel=?",
+                    (stamp, int(src), int(dst), old_rel),
+                )
+                self._db.execute(
                     "DELETE FROM edges WHERE src = ? AND dst = ? AND rel = ?",
                     (int(src), int(dst), old_rel),
                 )
@@ -619,11 +755,20 @@ class Store:
 
     def delete_edge(self, src: int, dst: int, rel: str) -> bool:
         with self._lock:
-            cur = self._db.execute(
-                "DELETE FROM edges WHERE src = ? AND dst = ? AND rel = ?",
-                (int(src), int(dst), rel),
-            )
-            self._db.commit()
+            try:
+                self._db.execute(
+                    "INSERT OR REPLACE INTO edge_deletions(src,dst,rel,ts) "
+                    "SELECT src,dst,rel,? FROM edges WHERE src=? AND dst=? AND rel=?",
+                    (time.time(), int(src), int(dst), rel),
+                )
+                cur = self._db.execute(
+                    "DELETE FROM edges WHERE src = ? AND dst = ? AND rel = ?",
+                    (int(src), int(dst), rel),
+                )
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
         return cur.rowcount > 0
 
     def add_pair_eval(

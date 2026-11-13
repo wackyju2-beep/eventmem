@@ -200,7 +200,7 @@ def test_health_and_status_endpoints():
             check_eq(status, 200, "health status")
             check_eq(body["status"], "ok", "health body")
             check_eq(body["db"], db, "db path echoed")
-            check_eq(body["schema"], 8, "schema version")
+            check_eq(body["schema"], 9, "schema version")
 
             status, body = api.request("/api/status")
             check_eq(status, 200, "status code")

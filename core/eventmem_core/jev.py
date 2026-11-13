@@ -275,53 +275,8 @@ def _choice_answer(answer, labels: tuple[str, ...]) -> dict | None:
     "none_probability": 0.017}``.  ``choice`` may be ``null`` (the server's none
     option won).  A label outside ``labels`` is malformed, not a different model.
     """
-    if not isinstance(answer, dict) or "choice" not in answer:
-        return None
-    raw_choice = answer.get("choice")
-    if raw_choice is None:
-        choice = None
-    else:
-        choice = str(raw_choice)
-        if choice not in labels:
-            return None
-
-    probs: dict[str, float] = {}
-    raw_probs = answer.get("probabilities")
-    if isinstance(raw_probs, dict):
-        for label in labels:
-            raw = raw_probs.get(label)
-            if raw is None:
-                continue
-            try:
-                value = float(raw)
-            except (TypeError, ValueError):
-                continue
-            if -1e-6 <= value <= 1.0 + 1e-6:
-                probs[label] = min(1.0, max(0.0, value))
-
-    raw_conf = answer.get("confidence")
-    if raw_conf is None and choice is not None:
-        raw_conf = probs.get(choice)
-    try:
-        confidence = float(raw_conf) if raw_conf is not None else 0.0
-    except (TypeError, ValueError):
-        return None
-    if not (-1e-6 <= confidence <= 1.0 + 1e-6):
-        return None
-
-    raw_none = answer.get("none_probability", answer.get("none"))
-    try:
-        none = float(raw_none) if raw_none is not None else 0.0
-    except (TypeError, ValueError):
-        none = 0.0
-    if not (-1e-6 <= none <= 1.0 + 1e-6):
-        none = 0.0
-    return {
-        "choice": choice,
-        "confidence": min(1.0, max(0.0, confidence)),
-        "probabilities": probs,
-        "none": min(1.0, max(0.0, none)),
-    }
+    from .providers import _parse_systemone
+    return _parse_systemone(answer, labels)
 
 
 def _probability(answer) -> float | None:

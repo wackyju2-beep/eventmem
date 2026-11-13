@@ -649,7 +649,7 @@ def test_advance_meta_ts_is_a_high_water_mark(store: Store) -> None:
 
 @case
 def test_schema_pragmas_and_idempotence(store: Store) -> None:
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == 9
 
     conn = raw(store)
     try:
@@ -661,7 +661,7 @@ def test_schema_pragmas_and_idempotence(store: Store) -> None:
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         for t in ("projects", "session_project", "events", "event_projects", "edges",
-                  "artifacts", "tombstones", "events_fts", "artifacts_fts", "pair_evals"):
+                  "artifacts", "tombstones", "events_fts", "artifacts_fts", "pair_evals", "edge_deletions"):
             assert t in tables, t
         assert "pending_turns" not in tables, "v3 的待补表必须在 v4 里被清掉"
 

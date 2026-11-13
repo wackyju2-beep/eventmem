@@ -43,6 +43,7 @@ function showTab(name) {
     $("tab-" + t).classList.toggle("on", t === name);
     document.querySelector(`nav button[data-tab="${t}"]`).classList.toggle("on", t === name);
   }
+  if (name !== "schedule") { backfillGeneration++; clearTimeout(backfillTimer); backfillTimer = null; }
   location.hash = name;
   refresh(name);
 }
@@ -88,9 +89,14 @@ $("run-once").onclick = async () => {
 
 /* ------------------------------------------------------------------ overview */
 
+/* The overview tick: 5 s while idle, 1.5 s while a pass is live, so the numbers move with
+   the +1 strip instead of lagging up to five seconds behind every answered pair. */
+let overviewDelay = 5000;
+
 async function refreshOverview() {
   const [stats, status, config] = await Promise.all([
     api("/api/stats"), api("/api/status"), api("/api/config")]);
+  overviewDelay = status.live ? 1500 : 5000;
 
   $("n-events").textContent = stats.events ?? "—";
   $("n-newest").textContent = stats.newest ? "最新 " + when(stats.newest) : "空库";
@@ -387,7 +393,94 @@ $("inst-go").onclick = async () => {
 
 /* ------------------------------------------------------------------ schedule */
 
+
+const fillText = (translate, text, ...args) => translate(text).replace(/\{(\d+)\}/g, (m, i) => args[+i] ?? m);
+function recalText(r, tr) {
+  const f = (text, ...args) => fillText(tr, text, ...args);
+  return ['改变', '否定', '重复', '因为', '细化'].map((rel) => f('{0}：新增 {1}，删除 {2}', tr(rel), r.added?.[rel] ?? '—', r.removed?.[rel] ?? '—')).concat([
+    f('置信度更新的边：{0}', r.confidence_updates ?? '—'), f('跳过的事件对：{0}', r.skipped ?? '—'), f('未覆盖的 Jev 边：{0}', r.uncovered_jev_edges ?? r.uncovered_edges ?? '—'), f('记录了人工删除的事件对：{0}', r.manual_deletion_pairs ?? '—'), ...(r.legacy_deletions_unknown ? [tr('旧版人工删除记录无法确认。')] : [])]).join('\n');
+}
+function backfillText(r, tr) {
+  return fillText(tr, '历史事件 {0} 条；当前图观察到 {1} 个候选对。该观察值不是最终数量，也不是上限或下限；新边可能改变后续候选。', r.event_count ?? '—', r.observed_pairs ?? '—');
+}
+function progressText(p, tr) {
+  const states = {idle:'尚无补算任务', pending:'等待中', running:'运行中', done:'已结束', error:'失败', completed:'已完成', stopped:'已停止', 'jev-unavailable':'模型不可用', 'jev-error':'模型判定失败'};
+  const state = p?.result?.status || p?.state || 'idle';
+  return fillText(tr, '补算状态：{0}；已判 {1} 对，新增 {2} 条边', tr(states[state] || state), p?.pairs ?? 0, p?.edges ?? 0) + (p?.error ? '\n' + p.error : '');
+}
+
 let scheduleCfg = null;
+let scheduleLang = {};
+const st = (s) => scheduleLang[s] || s;
+const SCHEDULE_ACCEPT = [
+  ['margin', '全局 margin'], ['min_conf_change', '改变最低置信度'],
+  ['min_conf_negate', '否定最低置信度'], ['min_conf_repeat', '重复最低置信度'],
+  ['min_conf_because', '因为最低置信度'], ['min_conf_refine', '细化最低置信度'],
+];
+let schedulePreviews = {};
+let backfillTimer = null;
+let backfillGeneration = 0;
+let lastBackfill = null;
+const scheduleSection = $('tab-schedule');
+const marginField = $('f-margin').parentElement;
+const acceptCard = document.createElement('div');
+acceptCard.className = 'card';
+acceptCard.style.marginTop = '14px';
+acceptCard.innerHTML = `<h2 data-st="关系接受条件">关系接受条件</h2><div class="grid c3" id="accept-fields"></div>
+  <div class="row" style="margin-top:12px"><button class="btn primary" id="accept-save" data-st="保存接受条件"></button>
+  <span class="hint" style="margin:0" data-st="保存后，从下一轮 pass 起的连边一律按这里的 margin 与最低置信度判定；已有边不动（要改历史就用下面的重校准预览）。"></span></div>`;
+scheduleSection.append(acceptCard);
+const recentField = document.createElement('div');
+recentField.innerHTML = `<label data-st="Tier2 · 同会话近期事件数"></label><input id="f-recent" type="number" min="0" step="1" value="3">`;
+$('f-session').parentElement.after(recentField);
+const saveHint = document.createElement('p'); saveHint.className = 'hint';
+saveHint.setAttribute('data-st', '保存未来设置会同时保存候选数量和关系规则；历史操作不会保存未来设置。');
+$('sched-save').parentElement.before(saveHint);
+$('accept-fields').append(marginField);
+marginField.querySelector('label').setAttribute('data-st', '全局 margin');
+for (const [key, label] of SCHEDULE_ACCEPT.slice(1)) {
+  const div = document.createElement('div');
+  div.innerHTML = `<label data-st="${esc(label)}">${esc(label)}</label><input id="f-${key}" type="number" min="0" max="1" step="0.01" value="0">`;
+  $('accept-fields').append(div);
+}
+const historyCard = document.createElement('div');
+historyCard.className = 'card';
+historyCard.style.marginTop = '14px';
+historyCard.innerHTML = `<h2 data-st="历史关系重校准">历史关系重校准</h2>
+  <p class="hint" data-st="只重判已有概率的关系；无法使用的记录会跳过。预览不会修改历史。"></p>
+  <p class="hint" data-st="历史概率格式有歧义，模型来源未知。StartLux 输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。"></p>
+  <label><input type="checkbox" id="recal-conditional"> <span data-st="将条件形式的历史概率按条件概率处理"></span></label>
+  <div class="row"><button class="btn" id="recal-preview" data-st="预览历史"></button><button class="btn" id="recal-apply" data-st="应用历史重校准" disabled></button></div><pre id="recal-result"></pre>
+  <h2 data-st="历史候选补算">历史候选补算</h2>
+  <p class="hint" data-st="重新选择历史候选需要 Jev 模型判定；耗时和成本不确定。预览不会启动任务。"></p>
+  <div class="row"><button class="btn" id="backfill-preview" data-st="预览历史"></button><button class="btn" id="backfill-start" data-st="启动历史候选补算" disabled></button></div><pre id="backfill-result"></pre><button class="btn" id="backfill-stop" data-st="停止补算" hidden></button>
+  <p class="hint" data-st="补算使用已保存的关系阈值，不使用未保存的阈值编辑；候选参数使用当前表单。"></p>
+  <div id="backfill-progress-label" class="hint" data-st="任务进度（服务状态）" hidden></div><pre id="backfill-progress"></pre>`;
+scheduleSection.append(historyCard);
+$('sched-save').setAttribute('data-st', '仅保存未来设置');
+$('sched-reset').setAttribute('data-st', '恢复调度默认值');
+scheduleSection.querySelectorAll('h2')[0].setAttribute('data-st', '预设（每轮问多少对）');
+scheduleSection.querySelectorAll('h2')[1].setAttribute('data-st', '候选选择与成本');
+scheduleSection.querySelectorAll('[data-preset]').forEach((el) => el.setAttribute('data-st', el.textContent));
+for (const id of ['f-heads', 'f-cos', 'f-session', 'f-lessons', 'f-skeleton', 'f-cross', 'f-crosscos', 'f-poll']) {
+  const label = $(id).parentElement.querySelector('label');
+  label.setAttribute('data-st', label.textContent);
+}
+  const tierHint = scheduleSection.querySelector('.hint');
+  tierHint.setAttribute('data-st', tierHint.textContent.trim());
+function translateSchedule() {
+  scheduleSection.querySelectorAll('[data-st]').forEach((el) => { el.textContent = st(el.dataset.st); });
+  updateCost();
+  if (lastBackfill) renderBackfill(lastBackfill);
+}
+translateSchedule();
+api('/api/i18n').then((r) => { scheduleLang = r.map || {}; translateSchedule(); }).catch((e) => toast(e.message, 'err'));
+function invalidateSchedulePreviews() {
+  schedulePreviews = {};
+  $('recal-apply').disabled = true; $('backfill-start').disabled = true;
+  $('recal-result').textContent = ''; $('backfill-result').textContent = '';
+}
+scheduleSection.querySelectorAll('input').forEach((el) => el.addEventListener('input', invalidateSchedulePreviews));
 
 const PRESETS = {
   light: { heads_vec_top_k: 5, session_heads_top_k: 3, unclosed_lessons: 1,
@@ -404,7 +497,9 @@ async function refreshSchedule() {
   $("f-heads").value = e.heads_vec_top_k ?? 10;
   $("f-cos").value = e.heads_cos_min ?? 0.35;
   $("f-margin").value = e.margin ?? 0.15;
+  for (const [key] of SCHEDULE_ACCEPT.slice(1)) $('f-' + key).value = e[key] ?? 0;
   $("f-session").value = e.session_heads_top_k ?? 10;
+  $("f-recent").value = e.session_recent ?? 3;
   $("f-lessons").value = e.unclosed_lessons ?? 2;
   $("f-skeleton").value = e.decision_skeleton ?? 5;
   $("f-cross").value = e.cross_top_k ?? 3;
@@ -412,13 +507,11 @@ async function refreshSchedule() {
   $("f-poll").value = e.poll_seconds ?? 60;
   $("sched-file").textContent = scheduleCfg.file || "（无配置文件）";
   updateCost();
+  await refreshBackfillStatus();
 }
 
 function updateCost() {
-  const pairs = ["f-heads", "f-session", "f-lessons", "f-skeleton", "f-cross"]
-    .map((id) => +$(id).value || 0).reduce((a, b) => a + b, 0);
-  const secs = pairs * 8;
-  $("cost").textContent = `每事件 ≈ ${pairs} 对 ≈ ${dur(secs)}（按 8 s/对估算）`;
+  $('cost').textContent = st('候选来源会去重，实际数量未知；每对 8 秒仅供参考，当前模型速度未知。');
 }
 
 ["f-heads", "f-session", "f-lessons", "f-skeleton", "f-cross"].forEach((id) => {
@@ -433,38 +526,127 @@ document.querySelectorAll("button[data-preset]").forEach((b) => {
     $("f-lessons").value = p.unclosed_lessons;
     $("f-skeleton").value = p.decision_skeleton;
     $("f-cross").value = p.cross_top_k;
+    invalidateSchedulePreviews();
     updateCost();
     toast("已填入预设，点保存才会写盘");
   };
 });
 
-$("sched-save").onclick = async () => {
+function scheduleKeys() { return ['heads_vec_top_k', 'heads_cos_min', 'margin', 'session_heads_top_k', 'session_recent', 'unclosed_lessons', 'decision_skeleton', 'cross_top_k', 'cross_cos_min', 'poll_seconds', ...SCHEDULE_ACCEPT.slice(1).map(([key]) => key)]; }
+function scheduleEdges() {
   const edges = {
     heads_vec_top_k: +$("f-heads").value,
     heads_cos_min: +$("f-cos").value,
     margin: +$("f-margin").value,
     session_heads_top_k: +$("f-session").value,
+    session_recent: +$("f-recent").value,
     unclosed_lessons: +$("f-lessons").value,
     decision_skeleton: +$("f-skeleton").value,
     cross_top_k: +$("f-cross").value,
     cross_cos_min: +$("f-crosscos").value,
     poll_seconds: +$("f-poll").value,
   };
+  for (const [key] of SCHEDULE_ACCEPT.slice(1)) edges[key] = +$('f-' + key).value;
+  if ([...scheduleSection.querySelectorAll('input[type=number]')].some((input) => input.value.trim() === '' || !input.validity.valid))
+    throw new Error(st('请输入有效数值（置信度与 margin 为 0–1）'));
+  return edges;
+}
+
+$('sched-save').onclick = async () => {
   try {
+    const edges = scheduleEdges();
     await api("/api/config", { edges });
-    toast("已保存；下一轮 pass 用新值", "ok");
+    invalidateSchedulePreviews();
+    toast(st("已保存；下一轮 pass 用新值"), "ok");
+    refreshSchedule();
+  } catch (e) { toast(e.message, "err"); }
+};
+
+// The acceptance rule has its own save, next to the fields it writes: margin plus the five
+// minimum confidences. Later edges use them; existing edges are untouched (that is what the
+// recalibration preview below is for).
+$('accept-save').onclick = async () => {
+  try {
+    const edges = acceptanceEdges(scheduleEdges());
+    await api("/api/config", { edges });
+    invalidateSchedulePreviews();
+    toast(st('接受条件已保存：之后的连边按该标准判定'), "ok");
     refreshSchedule();
   } catch (e) { toast(e.message, "err"); }
 };
 
 $("sched-reset").onclick = async () => {
-  if (!confirm("清掉 settings.yaml 里所有覆盖，回到默认值？")) return;
+  if (!confirm(st('仅清除调度字段的覆盖？'))) return;
   try {
-    await api("/api/config", { edges: null, decision: null, recall: null });
+    if (!(scheduleCfg?.overrides || {}).edges) { invalidateSchedulePreviews(); await refreshSchedule(); return; }
+    const edges = Object.fromEntries(scheduleKeys().map((key) => [key, null]));
+    await api("/api/config", { edges });
+    invalidateSchedulePreviews();
     toast("已恢复默认", "ok");
     refreshSchedule();
   } catch (e) { toast(e.message, "err"); }
 };
+
+
+function renderBackfill(p) {
+  lastBackfill = p;
+  $('backfill-progress-label').hidden = false;
+  $('backfill-progress').textContent = progressText(p, st);
+  $('backfill-stop').hidden = !['running', 'pending'].includes(p?.state);
+}
+async function refreshBackfillStatus() {
+  clearTimeout(backfillTimer); backfillTimer = null;
+  const generation = ++backfillGeneration;
+  try {
+    const status = await api('/api/status');
+    if (generation !== backfillGeneration || !$('tab-schedule').classList.contains('on')) return;
+    renderBackfill(status.backfill);
+    if (['running', 'pending'].includes(status.backfill?.state)) backfillTimer = setTimeout(refreshBackfillStatus, 5000);
+  } catch (e) { if ($('tab-schedule').classList.contains('on')) toast(e.message, 'err'); }
+}
+
+const candidateEdges = (edges) => Object.fromEntries(Object.entries(edges).filter(([key]) => !SCHEDULE_ACCEPT.some(([name]) => name === key) && key !== 'poll_seconds'));
+const acceptanceEdges = (edges) => Object.fromEntries(SCHEDULE_ACCEPT.map(([key]) => [key, edges[key]]));
+async function schedulePreview(kind) {
+  const id = kind === 'recalibrate' ? 'recal' : 'backfill';
+  const button = $(id + '-preview'); button.disabled = true;
+  delete schedulePreviews[kind];
+  $(kind === 'recalibrate' ? 'recal-apply' : 'backfill-start').disabled = true;
+  try {
+    const values = scheduleEdges();
+    const edges = kind === 'recalibrate' ? acceptanceEdges(values) : candidateEdges(values);
+    const path = kind === 'recalibrate' ? '/api/recalibrate/preview' : '/api/backfill/preview';
+    const historical_scale = kind === 'recalibrate' && $('recal-conditional').checked ? 'conditional' : null;
+    const result = await api(path, kind === 'recalibrate' ? { edges, historical_scale } : { edges });
+    if (!result.token) throw new Error(st('预览未返回令牌，无法应用'));
+    const current = scheduleEdges();
+    if (JSON.stringify(edges) !== JSON.stringify(kind === 'recalibrate' ? acceptanceEdges(current) : candidateEdges(current))) throw new Error(st('参数已改变，请重新预览'));
+    if (kind === 'recalibrate' && historical_scale !== ($('recal-conditional').checked ? 'conditional' : null)) throw new Error(st('参数已改变，请重新预览'));
+    schedulePreviews[kind] = { edges, result, historical_scale };
+    $(id + '-result').textContent = kind === 'recalibrate' ? recalText(result, st) : backfillText(result, st);
+    $(kind === 'recalibrate' ? 'recal-apply' : 'backfill-start').disabled = false;
+  } catch (e) { toast(e.message, 'err'); } finally { button.disabled = false; }
+}
+async function scheduleApply(kind) {
+  const p = schedulePreviews[kind]; if (!p || !confirm(st('确认应用历史操作？此操作不会保存未来设置。'))) return;
+  const button = $(kind === 'recalibrate' ? 'recal-apply' : 'backfill-start'); button.disabled = true;
+  try {
+    const current = scheduleEdges();
+    if (JSON.stringify(p.edges) !== JSON.stringify(kind === 'recalibrate' ? acceptanceEdges(current) : candidateEdges(current))) throw new Error(st('参数已改变，请重新预览'));
+    if (kind === 'recalibrate' && p.historical_scale !== ($('recal-conditional').checked ? 'conditional' : null)) throw new Error(st('参数已改变，请重新预览'));
+    const path = kind === 'recalibrate' ? '/api/recalibrate/apply' : '/api/backfill/start';
+    const result = await api(path, kind === 'recalibrate' ? { edges: p.edges, token: p.result.token, historical_scale: p.historical_scale } : { edges: p.edges, token: p.result.token });
+    delete schedulePreviews[kind];
+    toast(st('请求已提交'), 'ok');
+    if (kind === 'backfill') { renderBackfill(result.backfill); await refreshBackfillStatus(); }
+    else $('recal-result').textContent = recalText(result, st);
+  } catch (e) { toast(e.message, 'err'); }
+}
+$('recal-preview').onclick = () => schedulePreview('recalibrate');
+$('recal-apply').onclick = () => scheduleApply('recalibrate');
+$('backfill-preview').onclick = () => schedulePreview('backfill');
+$('backfill-start').onclick = () => scheduleApply('backfill');
+$('backfill-stop').onclick = async () => { try { await api('/api/stop', {}); toast(st('已请求停止：本轮做完手上这一对就停'), 'ok'); await refreshBackfillStatus(); } catch (e) { toast(e.message, 'err'); } };
 
 /* ------------------------------------------------------------------ logs */
 
@@ -483,11 +665,15 @@ $("log-refresh").onclick = () => refreshLogs().catch((e) => toast(e.message, "er
 
 /* ------------------------------------------------------------------ loop */
 
-setInterval(() => {
+async function tick() {
   refreshHealth();
   if ($("log-follow").checked && $("tab-logs").classList.contains("on")) refreshLogs();
-  if ($("tab-overview").classList.contains("on")) refreshOverview();
-}, 5000);
+  if ($("tab-overview").classList.contains("on")) {
+    try { await refreshOverview(); } catch (e) { toast(e.message, "err"); }
+  }
+  setTimeout(tick, $("tab-overview").classList.contains("on") ? overviewDelay : 5000);
+}
+tick();
 
 refreshHealth();
 showTab(location.hash.replace("#", "") || "overview");

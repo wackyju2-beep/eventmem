@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +27,28 @@ router = APIRouter()
 KINDS = ("决定", "尝试", "结果", "变更", "教训")
 RELS = ("改变", "否定", "重复", "因为", "细化")
 MAX_TEXT = 500
+
+#: ``core/`` sits four levels up from this file when the plugin is a symlink into the
+#: repository (the normal install): adapters/hermes/eventmem-graph/dashboard/ → repo.
+_CORE_ROOT = Path(__file__).resolve().parents[4] / "core"
+if (_CORE_ROOT / "eventmem_core").is_dir() and str(_CORE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CORE_ROOT))
+
+#: The ONNX encoder is ~50 MB of model + a session; build it once, lazily, and only when
+#: the semantic filter is actually used.
+_ENCODER: Any = None
+_ENCODER_LOCK = threading.Lock()
+
+
+def _encoder() -> Any:
+    global _ENCODER
+    if _ENCODER is None:
+        with _ENCODER_LOCK:
+            if _ENCODER is None:
+                from eventmem_core.embed import Encoder
+
+                _ENCODER = Encoder()
+    return _ENCODER
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS pair_evals (
@@ -38,6 +62,17 @@ CREATE TABLE IF NOT EXISTS pair_evals (
   PRIMARY KEY (src, dst)
 );
 CREATE INDEX IF NOT EXISTS idx_pair_evals_dst ON pair_evals(dst);
+CREATE TABLE IF NOT EXISTS edge_deletions (
+  src INTEGER NOT NULL, dst INTEGER NOT NULL, rel TEXT NOT NULL, ts REAL NOT NULL,
+  PRIMARY KEY (src, dst, rel)
+);
+CREATE TRIGGER IF NOT EXISTS edge_deletions_block_jev BEFORE INSERT ON edges
+WHEN NEW.decided_by = 'jev' AND EXISTS (
+  SELECT 1 FROM edge_deletions WHERE src = NEW.src AND dst = NEW.dst
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
 CREATE TABLE IF NOT EXISTS atom_pos (
   id         INTEGER PRIMARY KEY,
   x          REAL NOT NULL,
@@ -181,6 +216,10 @@ def _read_graph() -> dict[str, Any]:
             if int(r["id"]) in known
         ]
 
+        vec = conn.execute(
+            "SELECT count(vec) AS n, max(length(vec)) AS bytes FROM events"
+        ).fetchone()
+
         return {
             "ok": True,
             "db": str(_db_path()),
@@ -193,6 +232,8 @@ def _read_graph() -> dict[str, Any]:
             "sessions": sessions,
             "kinds": list(KINDS),
             "rels": list(RELS),
+            # 语义筛选的前提：已经有事件向量。空表 / 全 NULL 时前端会把入口标成不可用。
+            "vectors": {"events": int(vec["n"] or 0), "dim": int((vec["bytes"] or 0) // 4)},
         }
     finally:
         conn.close()
@@ -219,6 +260,101 @@ async def health() -> dict[str, Any]:
         return {"ok": True, "db": str(_db_path()), "events": int(n)}
     except Exception as exc:  # noqa: BLE001 - health must answer, not raise
         return {"ok": False, "db": str(_db_path()), "error": str(exc)}
+
+
+# --------------------------------------------------------------------------- semantic filter
+
+
+@router.post("/semantic")
+def semantic(body: dict[str, Any]) -> dict[str, Any]:
+    """Rank events by embedding similarity to a free-text query.
+
+    The query goes through the same encoder/instruction the recall path uses
+    (``is_query=True``), and the stored ``events.vec`` are already L2-normalised, so a
+    dot product is the cosine.  ``top`` is a hard cap on returned hits; the graph
+    intersects them with its other filters.
+    """
+    query = body.get("q")
+    if not isinstance(query, str) or not query.strip():
+        raise HTTPException(status_code=400, detail="q 不能为空")
+    query = query.strip()
+    if len(query) > MAX_TEXT:
+        raise HTTPException(status_code=400, detail=f"q 最多 {MAX_TEXT} 字")
+    try:
+        top = int(body.get("top") if body.get("top") is not None else 16)
+    except (TypeError, ValueError):
+        top = 16
+    top = max(1, min(top, 200))
+    raw_min = body.get("min_score")
+    try:
+        min_score = float(raw_min) if raw_min is not None else None
+    except (TypeError, ValueError):
+        min_score = None
+
+    try:
+        encoder = _encoder()
+    except Exception as exc:  # noqa: BLE001 - missing core / broken install must answer
+        raise HTTPException(status_code=503, detail=f"Embedding 编码器不可用：{exc}") from exc
+    check = getattr(encoder, "available", None)
+    if callable(check) and not check():
+        reason = getattr(encoder, "reason", None)
+        detail = reason() if callable(reason) else "encoder unavailable"
+        raise HTTPException(status_code=503, detail=f"Embedding 编码器不可用：{detail}")
+    qvec = encoder.encode(query, is_query=True)
+    if qvec is None:
+        raise HTTPException(status_code=503, detail="Embedding 编码失败（模型文件或运行时缺失）")
+
+    try:
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"numpy 不可用：{exc}") from exc
+    q = np.asarray(qvec, dtype=np.float32)
+    norm = float(np.linalg.norm(q))
+    if not norm or not math.isfinite(norm):
+        raise HTTPException(status_code=503, detail="query 向量无效")
+    q = q / norm
+
+    try:
+        conn = _connect()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=f"eventmem 数据库不存在：{exc}") from exc
+    try:
+        rows = conn.execute("SELECT id, vec FROM events WHERE vec IS NOT NULL").fetchall()
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail=f"读取向量失败：{exc}") from exc
+    finally:
+        conn.close()
+
+    hits: list[tuple[int, float]] = []
+    skipped = 0
+    for row in rows:
+        blob = row["vec"]
+        if not isinstance(blob, (bytes, bytearray)) or len(blob) % 4:
+            skipped += 1
+            continue
+        vec = np.frombuffer(blob, dtype=np.float32)
+        if vec.size != q.size:
+            # 维度不同的旧向量不参与排序（编码器换代时会是这样），但不能当成 0 分。
+            skipped += 1
+            continue
+        score = float(np.dot(vec, q))
+        if not math.isfinite(score):
+            skipped += 1
+            continue
+        if min_score is not None and score < min_score:
+            continue
+        hits.append((int(row["id"]), score))
+    hits.sort(key=lambda item: (-item[1], item[0]))
+
+    return {
+        "ok": True,
+        "query": query,
+        "top": top,
+        "dim": int(q.size),
+        "scanned": len(rows),
+        "skipped": skipped,
+        "hits": [{"id": eid, "score": round(score, 4)} for eid, score in hits[:top]],
+    }
 
 
 # --------------------------------------------------------------------------- write
@@ -287,6 +423,11 @@ async def patch_edge(body: dict[str, Any]) -> dict[str, Any]:
         _ensure(conn)
         if old_rel and old_rel != rel:
             conn.execute(
+                "INSERT OR REPLACE INTO edge_deletions(src,dst,rel,ts) "
+                "SELECT src,dst,rel,? FROM edges WHERE src=? AND dst=? AND rel=?",
+                (time.time(), src, dst, old_rel),
+            )
+            conn.execute(
                 "DELETE FROM edges WHERE src = ? AND dst = ? AND rel = ?",
                 (src, dst, old_rel),
             )
@@ -320,6 +461,12 @@ async def delete_edge(src: int, dst: int, rel: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"关系必须是 {'/'.join(RELS)}")
     conn = _connect()
     try:
+        _ensure(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO edge_deletions(src,dst,rel,ts) "
+            "SELECT src,dst,rel,? FROM edges WHERE src=? AND dst=? AND rel=?",
+            (time.time(), int(src), int(dst), rel),
+        )
         cur = conn.execute(
             "DELETE FROM edges WHERE src = ? AND dst = ? AND rel = ?", (int(src), int(dst), rel)
         )

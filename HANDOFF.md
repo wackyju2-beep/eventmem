@@ -249,3 +249,17 @@ tar czf - --exclude=.git --exclude=__pycache__ . | \
   且 `.emg-grid > .emg-card{margin-top:0}`。
 - **量这个的工具**在 `tools/plugin-smoke/bench/`（真 Chromium + 真场景 + esm.sh 的 React），
   改图谱时先跑一次 `await __bench(3000)` 再下结论。
+
+## 控制台布局与实时（2026-11-13）
+
+- **块间距只有一个来源**：多块页面的根 div 带 `emg-page`，`.emg-page > * + *{margin-top:12px}`。
+  旧规则只写 `.emg-card + .emg-card`，所以「grid 后面接卡」的概览（kind/项目 → 最近几轮 pass）
+  和模型页间距是 0，两个圆角边框黏成一条线。`.emg-tiles` 的 `margin-bottom` 同时删掉。
+- **概览跟着 pass 动**：`/api/status.live` 非空时 `Overview` 的轮询从 5 s 切到 1.5 s（与 +1 同频，
+  切换时立即重取，pass 结束那一下也补一次）。生产 `/api/stats` 实测 2 ms。
+- **`保存接受条件`**（调度页「关系接受条件」卡）：只 POST `{edges:{margin,min_conf_*}}`；右上角
+  `有未保存的改动`/`已保存` 由表单值与 `config.effective.edges` 比较得出。daemon 收到即在进程内换掉
+  `settings`，下一轮 pass 用新门槛，历史边不动（那是下面重校准预览的事）。浏览器版同一张卡里也有。
+- **量控制台的工具在 `tools/plugin-smoke/harness/`**：真 Chromium + 假 ctx（离线，React 取自本地
+  node_modules）。改完插件先 `build.sh` 再开 8899，`__harness.gaps()/posts()` 出数；
+  浏览器缓存要先用 CDP 关掉，否则量的是旧包。

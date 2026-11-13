@@ -435,6 +435,46 @@ def test_acceptance_add_a_cloud_backend_and_make_it_default():
         Path(db).unlink(missing_ok=True)
 
 
+@case
+def test_saving_the_acceptance_rules_governs_the_next_pass():
+    """The 关系接受条件 card has its own save, and it has to reach the running pass.
+
+    ``margin`` and the five minimum confidences are what turn a judged pair into an edge.
+    A save that only landed in settings.yaml would not change anything until a restart, so
+    the daemon swaps its live settings inside the same call — that object is what
+    ``run_once`` reads.
+    """
+    tmp = tempfile.mkdtemp(prefix="eventmem-acceptrules-")
+    db = fresh_db()
+    try:
+        home, packs_dir = home_with_packs(tmp)
+        daemon = daemon_mod.Daemon(settings_for(db, packs_dir), settings_store=FileStore(home))
+        with Live(daemon) as live:
+            status, body = live.post("/api/config", {"edges": {
+                "margin": 0.42, "min_conf_change": 0.31, "min_conf_negate": 0.32,
+                "min_conf_repeat": 0.33, "min_conf_because": 0.34, "min_conf_refine": 0.35}})
+            check_eq(status, 200, f"save: {body}")
+            saved = body["effective"]["edges"]
+            check_eq(saved["margin"], 0.42, "margin saved")
+            check_eq(saved["min_conf_refine"], 0.35, "and the per-relation floors")
+            check_eq(daemon.settings.edges.margin, 0.42, "the next pass reads the live object")
+            check_eq(daemon.settings.edges.min_conf_negate, 0.32, "every floor, not just the first")
+            check_eq(saved["heads_vec_top_k"], 10, "an acceptance save leaves candidates alone")
+
+            status, body = live.post("/api/config", {"edges": {"margin": 0.5}})
+            check_eq(status, 200, "a partial save merges")
+            check_eq(body["effective"]["edges"]["min_conf_change"], 0.31, "other floors kept")
+            check_eq(body["effective"]["edges"]["margin"], 0.5, "and the new margin applied")
+
+        check_eq(build_settings(home).edges.margin, 0.5, "persisted for the next process")
+        check_eq(build_settings(home).edges.min_conf_repeat, 0.33, "whole block persisted")
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
+        Path(db).unlink(missing_ok=True)
+
+
 # --------------------------------------------------------------------------- models + job
 
 @case

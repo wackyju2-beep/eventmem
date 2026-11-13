@@ -32,8 +32,9 @@ Direction is always older → newer (``src = later``, ``dst = earlier``); candid
 older than the event being processed, so a replay in ts order sees the head set evolve exactly as
 it would have in real time.
 
-Idempotency is delegated to ``store.add_edge``: the same ``(src, dst, rel)`` triple written on a
-re-run is silently ignored there.
+SQLite stores skip any previously archived pair or pair with an existing edge before asking.
+New archives and edges commit atomically, with a second check after the model call. Historical
+incomplete archives are conservatively preserved because a deleted edge has no tombstone.
 
 Run one pass with::
 
@@ -182,15 +183,14 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None,
     """Build relation edges for events newer than ``since_ts``.
 
     Returns ``{"pairs": n, "edges": m, "skipped": reason}`` where ``pairs`` is
-    the number of pairs actually sent to the decision model and ``edges`` the
-    number of edges handed to ``store.add_edge`` (duplicates are dropped by the
-    store, not here).  ``skipped`` is ``None`` on a normal run, otherwise one of
+    the number of pairs actually sent to the decision model and ``edges`` the number of newly
+    inserted edges.  ``skipped`` is ``None`` on a normal run, otherwise one of
     ``"jev-unavailable"``, ``"no-new-events"``, ``"jev-error"`` or ``"stopped"``.
 
     ``on_progress`` is called after every answered pair (the console's live counter) and
     ``should_stop`` is asked before each one: a stop is therefore graceful — the pair in
-    flight finishes, the cursor stays put, and the next pass redoes what is left
-    (``add_edge`` dedupes, so a redone pair costs time, never correctness).
+    flight finishes, the cursor stays put, and the next pass skips completed SQLite pairs.
+    Any model or persistence failure returns ``jev-error`` to retain the cursor for retry.
     """
     try:
         if not jev.available():
@@ -221,6 +221,7 @@ class _Nightly:
         self.edges = 0
         self._seen_pairs: set[tuple[int, int]] = set()
         self._fail_streak = 0
+        self._had_failure = False
         self._aborted = False
         self._stopped = False
 
@@ -239,7 +240,8 @@ class _Nightly:
         try:
             new = list(self.store.recent_events(since_ts) or [])
         except Exception:  # noqa: BLE001
-            new = []
+            _log.exception("eventmem nightly: failed to fetch recent events")
+            return {"pairs": 0, "edges": 0, "skipped": "jev-error"}
         if not new:
             return {"pairs": 0, "edges": 0, "skipped": "no-new-events"}
 
@@ -249,14 +251,16 @@ class _Nightly:
                 break
             try:
                 self._consider(ev)
-            except Exception:  # noqa: BLE001 - one malformed row must not kill the night
+            except Exception:  # noqa: BLE001 - do not advance past a failed candidate
+                self._had_failure = True
+                _log.exception("eventmem nightly: failed to consider event")
                 continue
 
         result = {
             "pairs": self.pairs,
             "edges": self.edges,
             "backend": self._backend_name(),
-            "skipped": "jev-error" if self._aborted else ("stopped" if self._stopped else None),
+            "skipped": "stopped" if self._stopped else ("jev-error" if self._had_failure else None),
             "stopped": self._stopped,
         }
         if self._aborted:
@@ -331,8 +335,10 @@ class _Nightly:
                 self._stopped = True
                 _log.info("eventmem nightly: stop requested, %d pairs done", self.pairs)
                 return
+            previous_pairs = self.pairs
             self._ask_and_write(other, ev)
-            self._tick()
+            if self.pairs != previous_pairs:
+                self._tick()
 
     # -------------------------------------------------------------- asking
 
@@ -345,26 +351,113 @@ class _Nightly:
         if pair in self._seen_pairs:
             return
         self._seen_pairs.add(pair)
+        if self._already_recorded(src, dst):
+            return
 
+        db = getattr(self.store, "_db", None)
+        lock = getattr(self.store, "_lock", None)
+        snapshot = None
+        if db is not None and lock is not None:
+            with lock:
+                snapshot = self._event_snapshot(db, src, dst)
+            by_id = {row[0]: row for row in snapshot}
+            if any(eid not in by_id or
+                   tuple(_field(ev, key) for key in ("ts", "kind", "text", "project_id")) != by_id[eid][1:5]
+                   for eid, ev in ((src, new), (dst, old))):
+                self._had_failure = True
+                return
         self.pairs += 1
         answers = self._decide_choices(old, new)
         if answers is None:
             return
         axis, detail = answers
+        if not (_complete_answer(axis, _AXIS_RELS) and _complete_answer(detail, _DETAIL_RELS)):
+            self._fail()
+            return
+        self._fail_streak = 0
+        db = getattr(self.store, "_db", None)
+        lock = getattr(self.store, "_lock", None)
+        if db is not None and lock is not None:
+            self._commit_pair(src, dst, axis, detail, snapshot)
+            return
 
-        # 先留档：这一对问过模型了，不管连不连边——可视化里的灰线靠它。
+        # Compatibility path for non-SQLite stores and test doubles.
         self._record_pair(src, dst, axis, detail)
 
-        hit = _accepted(axis, _AXIS_RELS, self.pol.margin)
+        hit = _accepted(axis, _AXIS_RELS, self.pol.margin, self.pol)
         if hit is not None:
             rel, conf, probs = hit
             self._write(src, dst, rel, conf, probs)
             if rel == "重复":
                 return  # 换种说法没有新信息：补充轴不写
-        hit = _accepted(detail, _DETAIL_RELS, self.pol.margin)
+        hit = _accepted(detail, _DETAIL_RELS, self.pol.margin, self.pol)
         if hit is not None:
             rel, conf, probs = hit
             self._write(src, dst, rel, conf, probs)
+
+    @staticmethod
+    def _event_snapshot(db, src, dst):
+        return tuple(tuple(row) for row in db.execute(
+            "SELECT id,ts,kind,text,project_id,edited_ts FROM events WHERE id IN (?,?) ORDER BY id",
+            (src, dst)))
+
+    def _commit_pair(self, src: int, dst: int, axis, detail, snapshot) -> None:
+        """Atomically preserve the first writer and its complete decision."""
+        axis_hit = _accepted(axis, _AXIS_RELS, self.pol.margin, self.pol)
+        detail_hit = _accepted(detail, _DETAIL_RELS, self.pol.margin, self.pol)
+        hits = [axis_hit] if axis_hit else []
+        if detail_hit and (not axis_hit or axis_hit[0] != "重复"):
+            hits.append(detail_hit)
+        db = self.store._db
+        with self.store._lock:
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                if len(snapshot) != 2 or self._event_snapshot(db, src, dst) != snapshot:
+                    db.rollback()
+                    self._had_failure = True
+                    return
+                if db.execute("SELECT 1 FROM pair_evals WHERE src=? AND dst=? "
+                              "UNION ALL SELECT 1 FROM edges WHERE src=? AND dst=? "
+                              "UNION ALL SELECT 1 FROM edge_deletions WHERE "
+                              "(src=? AND dst=?) OR (src=? AND dst=?) LIMIT 1",
+                              (src, dst, src, dst, src, dst, dst, src)).fetchone():
+                    db.rollback()
+                    return
+                inserted = db.execute("INSERT INTO pair_evals(src,dst,axis_probs,detail_probs,axis_label,detail_label,ts) "
+                           "VALUES(?,?,?,?,?,?,?)",
+                           (src, dst, json.dumps(_dist(axis, _AXIS_RELS), ensure_ascii=False, sort_keys=True),
+                            json.dumps(_dist(detail, _DETAIL_RELS), ensure_ascii=False, sort_keys=True),
+                            axis_hit[0] if axis_hit else None, detail_hit[0] if detail_hit else None,
+                            time.time()))
+                if inserted.rowcount != 1:
+                    raise RuntimeError('pair archive insert was ignored')
+                cross = self.store._infer_cross(src, dst)
+                for rel, conf, probs in hits:
+                    inserted = db.execute("INSERT INTO edges(src,dst,rel,conf,decided_by,cross,probs,backend) "
+                               "VALUES(?,?,?,?,?,?,?,?)",
+                               (src, dst, rel, conf, "jev", cross,
+                                json.dumps(probs, ensure_ascii=False, sort_keys=True), self._backend_name()))
+                    if inserted.rowcount != 1:
+                        raise RuntimeError('edge insert was ignored')
+                db.commit()
+                self.edges += len(hits)
+            except Exception:  # noqa: BLE001 - don't advance the cursor after a persistence failure
+                db.rollback()
+                self._had_failure = True
+                _log.exception("eventmem nightly: pair persistence failed")
+
+    def _already_recorded(self, src: int, dst: int) -> bool:
+        """Skip a previously archived pair; adapters without SQLite retain legacy behavior."""
+        db = getattr(self.store, "_db", None)
+        lock = getattr(self.store, "_lock", None)
+        if db is None or lock is None:
+            return False
+        with lock:
+            return db.execute("SELECT 1 FROM pair_evals WHERE src=? AND dst=? "
+                              "UNION ALL SELECT 1 FROM edges WHERE src=? AND dst=? "
+                              "UNION ALL SELECT 1 FROM edge_deletions WHERE "
+                              "(src=? AND dst=?) OR (src=? AND dst=?) LIMIT 1",
+                              (src, dst, src, dst, src, dst, dst, src)).fetchone() is not None
 
     def _record_pair(self, src: int, dst: int, axis, detail) -> None:
         """Persist both raw distributions for a pair (tolerant of fakes/old stores)."""
@@ -377,8 +470,8 @@ class _Nightly:
                 dst,
                 axis_probs=_dist(axis, _AXIS_RELS),
                 detail_probs=_dist(detail, _DETAIL_RELS),
-                axis_label=_top_label(axis, _AXIS_RELS, self.pol.margin),
-                detail_label=_top_label(detail, _DETAIL_RELS, self.pol.margin),
+                axis_label=_top_label(axis, _AXIS_RELS, self.pol.margin, self.pol),
+                detail_label=_top_label(detail, _DETAIL_RELS, self.pol.margin, self.pol),
                 ts=time.time(),
             )
         except Exception:  # noqa: BLE001 - an archive miss must not cost the pair
@@ -400,13 +493,11 @@ class _Nightly:
             raw = None
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
             return self._fail()
-        if all(item is None for item in raw):
-            return self._fail()
-        self._fail_streak = 0
         return [_canonical_answer(item) for item in raw]
 
     def _fail(self):
         """Count one failed decide; after a few in a row, stop the night."""
+        self._had_failure = True
         self._fail_streak += 1
         if self._fail_streak >= self.pol.max_fail_streak:
             self._aborted = True
@@ -708,6 +799,23 @@ class _Nightly:
 # --------------------------------------------------------------------------- #
 
 
+def _complete_answer(answer, labels: tuple[str, ...]) -> bool:
+    """Reject missing, non-numeric or out-of-range model probabilities before writing."""
+    if not isinstance(answer, dict) or not isinstance(answer.get("probabilities"), dict):
+        return False
+    probs = answer["probabilities"]
+    if any(label not in probs for label in labels) or "none" not in answer:
+        return False
+    try:
+        values = [probs[label] for label in labels] + [answer["none"]]
+        if any(isinstance(value, bool) for value in values):
+            return False
+        return all(math.isfinite(float(value)) and 0.0 <= float(value) <= 1.0
+                   for value in values)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _dist(answer, labels: tuple[str, ...]) -> dict | None:
     """The raw distribution ``{label: p, ..., 都不是: p}`` for one question, or None."""
     if not isinstance(answer, dict):
@@ -728,19 +836,18 @@ def _dist(answer, labels: tuple[str, ...]) -> dict | None:
     return dist
 
 
-def _top_label(answer, labels: tuple[str, ...], margin: float = MARGIN) -> str | None:
-    """The label that clears ``margin``, else None (used only to annotate the archive)."""
-    hit = _accepted(answer, labels, margin)
+def _top_label(answer, labels: tuple[str, ...], margin: float = MARGIN, policy=None) -> str | None:
+    """The label that clears the policy, else None (used to annotate the archive)."""
+    hit = _accepted(answer, labels, margin, policy)
     return hit[0] if hit is not None else None
 
 
-def _accepted(answer, labels: tuple[str, ...], margin: float = MARGIN):
+def _accepted(answer, labels: tuple[str, ...], margin: float = MARGIN, policy=None):
     """``(label, probability, distribution)`` when the winner clears ``MARGIN``.
 
-    The ranking runs on the **raw** distribution: the server's 「都不是」 is one more option in
-    the same softmax (``none_probability``), while ``probabilities`` excludes it.  Comparing them
-    together is what turns "0.42 vs 0.38" into a non-decision — on the renormalised scale the
-    same pair looks like 0.52 vs 0.47 and would pass any margin.
+    Rank on the common unconditional scale, converting a marked conditional distribution
+    before comparing it with 「都不是」.  Keep the original values in the returned distribution
+    so the edge and pair archive remain comparable.
 
     Returns ``None`` when a real label did not win, or won by less than ``MARGIN``.
     """
@@ -748,12 +855,24 @@ def _accepted(answer, labels: tuple[str, ...], margin: float = MARGIN):
     if dist is None:
         return None
 
-    ranked = sorted(dist.items(), key=lambda item: (-item[1], item[0]))
+    ranked_dist = dist
+    if answer.get("probability_scale") == "conditional":
+        ranked_dist = {key: (value if key == NONE_LABEL else value * (1.0 - dist[NONE_LABEL]))
+                       for key, value in dist.items()}
+    ranked = sorted(ranked_dist.items(), key=lambda item: (-item[1], item[0]))
     label, top = ranked[0]
     runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
     if label not in labels:
         return None
-    if top - runner_up < margin:
+    if top <= runner_up:
+        return None  # Never break a top tie by label spelling, even when margin is zero.
+    gap = top - runner_up
+    if gap < margin and not math.isclose(gap, margin, rel_tol=0.0, abs_tol=1e-15):
+        return None
+    threshold_key = {'改变': 'min_conf_change', '否定': 'min_conf_negate',
+                     '重复': 'min_conf_repeat', '因为': 'min_conf_because',
+                     '细化': 'min_conf_refine'}[label]
+    if policy is not None and top < getattr(policy, threshold_key, 0.0):
         return None
     return label, top, dist
 

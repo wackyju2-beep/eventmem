@@ -11,8 +11,9 @@ Formats
     ``questions`` **object** keyed by question id.  Served by llama.cpp (upstream since
     the /v1/systemone merge), LM Studio ("Jev Compatibility"), and the hosted API.
     ``allow_none`` makes the server append its own "none of the above" option, returned
-    as ``none_probability`` — that option shares the softmax with the real labels, so it
-    competes in the ``margin`` test.
+    as ``none_probability``. StartLux renormalises the other options conditionally;
+    other System One servers may return unconditional values. Complete sums determine
+    the scale when unambiguous, and near-overlap is rejected rather than guessed.
 
 ``openai-decisions``
     OpenAI's ``POST /v1/decisions`` (``gpt-6-luna``), also served locally by LM Studio
@@ -32,6 +33,7 @@ Both normalise to the shape the edge builder already consumes::
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 from typing import Any, Iterable
 
 from .i18n import tr
@@ -146,13 +148,15 @@ def parse_answers(
 
 
 def _clamp01(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not -1e-6 <= number <= 1.0 + 1e-6:
+    if not 0.0 <= number <= 1.0:
         return None
-    return min(1.0, max(0.0, float(number)))
+    return number
 
 
 def _answer(choice: str | None, confidence: Any, probabilities: dict[str, float],
@@ -185,14 +189,41 @@ def _parse_systemone(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
 
     probabilities: dict[str, float] = {}
     raw_probs = answer.get("probabilities")
+    if not isinstance(raw_probs, Mapping) or set(raw_probs) != set(labels):
+        return None
     if isinstance(raw_probs, Mapping):
         for label in labels:
             prob = _clamp01(raw_probs.get(label))
             if prob is not None:
                 probabilities[label] = prob
 
-    none = _clamp01(answer.get("none_probability", answer.get("none"))) or 0.0
-    return _answer(choice, answer.get("confidence"), probabilities, none)
+    if len(probabilities) != len(labels):
+        return None
+
+    none = _clamp01(answer.get("none_probability", answer.get("none")))
+    if none is None:
+        return None
+    result = _answer(choice, answer.get("confidence"), probabilities, none)
+    if result is not None:
+        scale = probability_scale(probabilities.values(), none)
+        if scale is None:
+            return None
+        result["probability_scale"] = scale
+    return result
+
+
+def probability_scale(real, none: float, tolerance: float = 1e-6) -> str | None:
+    """Classify complete distributions; overlapping nonzero cases are ambiguous."""
+    total = math.fsum(real)
+    conditional = abs(total - 1.0) <= tolerance
+    unconditional = abs(total + none - 1.0) <= tolerance
+    if conditional and unconditional:
+        return "unconditional" if none == 0.0 else None
+    if conditional:
+        return "conditional"
+    if unconditional:
+        return "unconditional"
+    return None
 
 
 def _parse_decisions(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | None:
@@ -214,13 +245,17 @@ def _parse_decisions(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
             return None
 
     probabilities: dict[str, float] = {}
-    none = 0.0
+    none = None
     raw_probs = answer.get("probabilities")
     if isinstance(raw_probs, Sequence) and not isinstance(raw_probs, (str, bytes)):
+        seen = set()
         for entry in raw_probs:
             if not isinstance(entry, Mapping):
-                continue
-            value = str(entry.get("value"))
+                return None
+            value = entry.get("value")
+            if value not in (*labels, NONE_LABEL) or value in seen:
+                return None
+            seen.add(value)
             prob = _clamp01(entry.get("probability"))
             if prob is None:
                 continue
@@ -228,4 +263,8 @@ def _parse_decisions(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
                 none = prob
             elif value in labels:
                 probabilities[value] = prob
+    if none is None or len(probabilities) != len(labels):
+        return None
+    if abs(math.fsum(probabilities.values()) + none - 1.0) > 1e-6:
+        return None
     return _answer(choice, answer.get("confidence"), probabilities, none)

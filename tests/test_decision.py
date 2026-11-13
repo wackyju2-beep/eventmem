@@ -46,9 +46,9 @@ DETAIL = ("detail", "后一条和前一条是什么补充关系？", {"因为": 
 SYSTEMONE_OK = {
     "answers": {
         "axis": {"choice": "改变", "confidence": 0.7,
-                 "probabilities": {"重复": 0.1, "改变": 0.7, "否定": 0.1},
-                 "none_probability": 0.1},
-        "detail": {"choice": None, "confidence": 0.0, "probabilities": {}, "none_probability": 0.9},
+                 "probabilities": {"重复": 0.1, "改变": 0.7},
+                 "none_probability": 0.2},
+        "detail": {"choice": None, "confidence": 0.0, "probabilities": {"因为": 0.1}, "none_probability": 0.9},
     }
 }
 

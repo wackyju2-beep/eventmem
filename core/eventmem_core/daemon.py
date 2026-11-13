@@ -46,6 +46,7 @@ import argparse
 import collections
 import json
 import logging
+import math
 import mimetypes
 import os
 import sqlite3
@@ -57,6 +58,7 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 
 from . import install as install_mod
+from . import candidate_backfill
 from . import packs as packs_mod
 from . import runtime
 from . import ui_strings
@@ -96,6 +98,12 @@ class Daemon:
         self.packs_root = str(packs_root or getattr(settings.decision, "packs_dir", "") or "")
         self.started = time.time()
         self._pass_lock = threading.Lock()
+        self._config_lock = threading.RLock()
+        self._preview_tokens: set[str] = set()
+        self._backfill_plans: dict[str, Any] = {}
+        self._backfill: dict[str, Any] = {'state': 'idle', 'pairs': 0, 'edges': 0,
+                                         'result': None, 'error': '', 'started': 0, 'finished': 0}
+        self._backfill_thread: Optional[threading.Thread] = None
         self._runs: collections.deque = collections.deque(maxlen=20)
         self._stop = threading.Event()
         #: Cooperative cancellation of the *current* pass (``POST /api/stop``).  Distinct from
@@ -249,6 +257,7 @@ class Daemon:
         body["cursor"] = self._cursor_view()
         # Live pass state: the console's "using <backend>, +1 per pair" strip polls this.
         body["live"] = self._live
+        body["backfill"] = dict(self._backfill)
         body["busy"] = self._pass_lock.locked()
         body["stopping"] = self._abort.is_set()
         body["down"] = {name: round(max(0.0, COOLDOWN - (time.time() - when)), 1)
@@ -324,19 +333,193 @@ class Daemon:
 
     # ------------------------------------------------------------------ actions
 
+    def _backfill_policy(self, body: Any):
+        from dataclasses import replace
+        from .settings import KINDS
+        if not isinstance(body, dict) or not isinstance(body.get('edges'), dict):
+            raise ValueError('expected {edges: {...}}')
+        values = body['edges']
+        counts = {'heads_vec_top_k', 'session_heads_top_k', 'cross_top_k',
+                  'session_recent', 'unclosed_lessons', 'decision_skeleton'}
+        cosines = {'heads_cos_min', 'cross_cos_min'}
+        ignored = {'margin', 'min_conf_change', 'min_conf_negate', 'min_conf_repeat',
+                   'min_conf_because', 'min_conf_refine', 'poll_seconds'}
+        if set(values) - counts - cosines - ignored - {'cross_kinds'}:
+            raise ValueError('unknown backfill edge field')
+        for key, value in values.items():
+            if key == 'cross_kinds':
+                if not isinstance(value, list) or any(not isinstance(v, str) or v not in KINDS for v in value):
+                    raise ValueError('cross_kinds must be an array of known event kinds')
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f'{key} must be a finite number')
+            if key in counts and (value < 0 or int(value) != value):
+                raise ValueError(f'{key} must be a non-negative integer')
+            if key in cosines and not -1 <= value <= 1:
+                raise ValueError(f'{key} must be between -1 and 1')
+            if key in ignored and (value < 0 or (key != 'poll_seconds' and value > 1)):
+                raise ValueError(f'{key} out of range')
+        changes = {key: int(values[key]) if key in counts else values[key]
+                   for key in counts | cosines if key in values}
+        if 'cross_kinds' in values:
+            changes['cross_kinds'] = tuple(values['cross_kinds'])
+        return replace(self.settings.edges, **changes)
+
+    def backfill_preview(self, body: Any) -> tuple[int, dict[str, Any]]:
+        try:
+            with self._config_lock:
+                policy = self._backfill_policy(body)
+        except ValueError as exc:
+            return 400, {'error': str(exc)}
+        if not self._pass_lock.acquire(blocking=False):
+            return 409, {'error': 'daemon pass busy'}
+        try:
+            if not self.settings.db_path or not os.path.exists(self.settings.db_path):
+                return 400, {'error': 'database not found'}
+            with Store(self.settings.db_path) as store:
+                plan = candidate_backfill.preview(store, policy)
+            self._backfill_plans[plan.token] = plan
+            if len(self._backfill_plans) > 32:
+                self._backfill_plans = {plan.token: plan}
+            return 200, {'token': plan.token, 'event_count': plan.event_count,
+                         'observed_pairs': len(plan.observed_pairs), 'exact_total': None}
+        finally:
+            self._pass_lock.release()
+
+    def backfill_start(self, body: Any) -> tuple[int, dict[str, Any]]:
+        if not self._pass_lock.acquire(blocking=False):
+            return 409, {'error': 'daemon pass busy'}
+        handed_off = False
+        try:
+            with self._config_lock:
+                try:
+                    policy = self._backfill_policy(body)
+                except ValueError as exc:
+                    return 400, {'error': str(exc)}
+                token = body.get('token')
+                plan = self._backfill_plans.get(token) if isinstance(token, str) else None
+                if plan is None or plan.policy != policy:
+                    return 409, {'error': 'preview required or policy changed'}
+                settings = self.settings
+                if not settings.db_path or not os.path.exists(settings.db_path):
+                    return 400, {'error': 'database not found'}
+                with Store(settings.db_path) as store:
+                    if candidate_backfill._fingerprint(store, policy) != token:
+                        return 409, {'error': 'preview is stale; preview again'}
+                self._backfill_plans.clear()
+                self._abort.clear()
+                started = time.time()
+                self._backfill = {'state': 'running', 'pairs': 0, 'edges': 0,
+                                  'result': None, 'error': '', 'started': started, 'finished': 0}
+                thread = threading.Thread(target=self._backfill_worker, args=(settings, plan),
+                                          name='eventmem-backfill', daemon=True)
+                self._backfill_thread = thread
+                thread.start()
+                handed_off = True
+                return 202, {'ok': True, 'backfill': dict(self._backfill)}
+        finally:
+            if not handed_off:
+                self._pass_lock.release()
+
+    def _backfill_worker(self, settings, plan) -> None:
+        started = self._backfill['started']
+        def progress(state):
+            self._backfill.update(pairs=state['pairs'], edges=state['edges'])
+            self._live = {'backend': str(getattr(client, 'active_name', '') or ''),
+                          'pairs': state['pairs'], 'edges': state['edges'],
+                          'since': started, 'updated': time.time()}
+        try:
+            self._live = {'backend': '', 'pairs': 0, 'edges': 0,
+                          'since': started, 'updated': started}
+            if not self._abort.is_set() and not self._stop.is_set():
+                self.prepare(settings)
+                if not settings.decision.backends and settings.decision.url:
+                    if not W.ensure_service(settings.decision.start_script, settings.decision.url):
+                        result = {'status': 'jev-unavailable', 'pairs': 0, 'edges': 0}
+                        self._backfill.update(state='done', result=result)
+                        return
+            now = time.time()
+            avoid = tuple(n for n, t in self._down.items() if now - t < COOLDOWN)
+            client = W.from_settings(settings, warn=_log.warning, avoid=avoid)
+            with Store(settings.db_path) as store:
+                result = candidate_backfill.execute(
+                    store, client, plan, token=plan.token,
+                    should_stop=lambda: self._abort.is_set() or self._stop.is_set(),
+                    on_progress=progress)
+            backend = str(getattr(client, 'active_name', '') or '')
+            if backend and result['status'] == 'jev-error':
+                self._down[backend] = time.time()
+            elif backend and result['status'] == 'completed':
+                self._down.pop(backend, None)
+            self._backfill.update(state='done', result=result, pairs=result['pairs'], edges=result['edges'])
+        except Exception as exc:  # noqa: BLE001
+            _log.warning('eventmem daemon: backfill failed (%s)', exc)
+            self._backfill.update(state='error', error=f'{type(exc).__name__}: {exc}')
+        finally:
+            self._backfill['finished'] = time.time()
+            self._live = None
+            self._pass_lock.release()
+
     def save_config(self, body: Any) -> tuple[int, dict[str, Any]]:
         if self.settings_store is None:
             return 501, {"error": "这个 daemon 没有配置存储（--once 或测试模式）"}
         if not isinstance(body, dict) or not body:
             return 400, {"error": '要一个非空 JSON 对象，例如 {"edges": {"heads_vec_top_k": 8}}'}
         try:
-            self.settings = self.settings_store.write(body)
+            with self._config_lock:
+                self.settings = self.settings_store.write(body)
         except (PackError, ValueError) as exc:
             return 400, {"error": str(exc)}
         except Exception as exc:  # noqa: BLE001
             return 500, {"error": f"{type(exc).__name__}: {exc}"}
         _log.info("eventmem daemon: settings updated from the GUI: %s", sorted(body))
         return 200, {"ok": True, **self.config_view()}
+
+    def recalibrate(self, body: Any, *, apply_changes: bool) -> tuple[int, dict[str, Any]]:
+        from .settings import apply as apply_settings
+        keys = {'margin', 'min_conf_change', 'min_conf_negate', 'min_conf_repeat',
+                'min_conf_because', 'min_conf_refine'}
+        if not isinstance(body, dict) or not isinstance(body.get('edges'), dict):
+            return 400, {'error': 'expected {edges: {...}}'}
+        historical_scale = body.get('historical_scale')
+        if historical_scale is not None and historical_scale != 'conditional':
+            return 400, {'error': 'historical_scale must be null or conditional'}
+        values = body['edges']
+        if set(values) - keys or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                                     for v in values.values()):
+            return 400, {'error': 'edges must contain only numeric threshold fields'}
+        token = body.get('token') if apply_changes else None
+        if apply_changes and (not isinstance(token, str) or token not in self._preview_tokens):
+            return 409, {'error': 'preview required or token expired'}
+        try:
+            policy = apply_settings(self.settings, {'edges': values}, strict=True).edges
+        except ValueError as exc:
+            return 400, {'error': str(exc)}
+        if not self._pass_lock.acquire(blocking=False):
+            return 409, {'error': 'daemon pass busy'}
+        try:
+            self._config_lock.acquire()
+            if apply_changes and token not in self._preview_tokens:
+                return 409, {'error': 'preview required or token expired'}
+            policy = apply_settings(self.settings, {'edges': values}, strict=True).edges
+            if not self.settings.db_path or not os.path.exists(self.settings.db_path):
+                return 400, {'error': 'database not found'}
+            with Store(self.settings.db_path) as store:
+                try:
+                    result = store.recalibrate(policy, token=token, historical_scale=historical_scale)
+                except ValueError as exc:
+                    return 409, {'error': str(exc)}
+            if apply_changes:
+                self._preview_tokens.clear()
+                result['ok'] = True
+            else:
+                self._preview_tokens.add(result['token'])
+                if len(self._preview_tokens) > 32:
+                    self._preview_tokens = {result['token']}
+            return 200, result
+        finally:
+            self._config_lock.release()
+            self._pass_lock.release()
 
     def packs_view(self) -> dict[str, Any]:
         found, problems = packs_mod.discover(self.packs_root)
@@ -545,6 +728,14 @@ class Daemon:
             return 200, {"lang": lang, "map": ui_strings.strings_for(lang)}
         if method == "POST" and tail == ["config"]:
             return self.save_config(body)
+        if method == 'POST' and tail == ['recalibrate', 'preview']:
+            return self.recalibrate(body, apply_changes=False)
+        if method == 'POST' and tail == ['recalibrate', 'apply']:
+            return self.recalibrate(body, apply_changes=True)
+        if method == 'POST' and tail == ['backfill', 'preview']:
+            return self.backfill_preview(body)
+        if method == 'POST' and tail == ['backfill', 'start']:
+            return self.backfill_start(body)
         if method == "GET" and tail == ["backends"]:
             return 200, {"backends": [self.backend_status(p) for p in self.packs()]}
         if method == "GET" and tail == ["runs"]:

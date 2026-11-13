@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # ``PRAGMA`` statements are deliberately absent: journal_mode / foreign_keys are no-ops inside a
 # transaction, and executescript() commits whatever is pending. ensure_schema() sets them first.
@@ -108,6 +108,23 @@ CREATE TABLE IF NOT EXISTS pair_evals (
   ts           REAL NOT NULL,
   PRIMARY KEY (src, dst)
 );
+
+-- Explicit manual edge deletions; missing rows cannot prove legacy intent.
+CREATE TABLE IF NOT EXISTS edge_deletions (
+  src INTEGER NOT NULL,
+  dst INTEGER NOT NULL,
+  rel TEXT NOT NULL,
+  ts REAL NOT NULL,
+  PRIMARY KEY (src, dst, rel)
+);
+
+CREATE TRIGGER IF NOT EXISTS edge_deletions_block_jev BEFORE INSERT ON edges
+WHEN NEW.decided_by = 'jev' AND EXISTS (
+  SELECT 1 FROM edge_deletions WHERE src = NEW.src AND dst = NEW.dst
+)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
 
 -- 墓碑：只有 id + 内容哈希，永不含文本（设计文档 §8）
 CREATE TABLE IF NOT EXISTS tombstones (

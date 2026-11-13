@@ -284,7 +284,11 @@ route of its own any more — it only hands its 3D view to the console).
 | click an edge | endpoints pulled to the left and right of the screen; distribution, edit, delete |
 | left-drag a box | put it anywhere; positions survive a refresh |
 | click empty space | drops focus only, nothing snaps back |
-| filter | non-matching atoms recede; either the matches, or the matches plus one-hop neighbours |
+| filter | project / session / date / kind / edge relation / exact id / semantic embedding search — every criterion ANDs together; either the matches, or the matches plus one-hop neighbours |
+
+Semantic search embeds what you type with the same encoder recall uses and keeps the top-N events, then
+intersects them with the other filters. It needs ``events.vec`` populated and the ONNX runtime available;
+when either is missing the graph says so instead of quietly returning nothing.
 
 ![One atom focused](docs/img/graph-atom.png)
 *One atom: text, kind, project, and the nine edges attached to it.*

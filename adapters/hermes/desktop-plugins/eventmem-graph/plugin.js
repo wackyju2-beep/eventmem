@@ -72,24 +72,25 @@ const CSS = `
   user-select:none;contain:layout style paint;will-change:transform}
 /* The wrapper is 176x56 and the body shrinks inside it, so the body must be centred —
    anchored top-left it drifts away from the projected point and the edges then miss it. */
-.em-atom-body{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden;
+.em-atom-body{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden;box-sizing:border-box;
   pointer-events:auto;cursor:pointer;
   width:calc(20px + 156px * var(--m,0));height:calc(20px + 36px * var(--m,0));
   border-radius:calc(10px - var(--m,0) * 1px);
   background:var(--ui-bg-card);
-  border-style:solid;border-color:color-mix(in srgb,var(--ui-stroke-secondary) 72%,transparent);
-  border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));
+  border-style:solid;
+  border-color:color-mix(in srgb,var(--em-kind-color,var(--ui-text-secondary)) calc((1 - var(--m,0)) * 100%),var(--ui-stroke-secondary));
+  border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));border-left-color:var(--em-kind-color,var(--ui-text-secondary));
   box-shadow:0 2px 8px color-mix(in srgb,var(--ui-base) 30%,transparent)}
 .em-atom-num{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
-  font:700 9px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
+  font:700 8px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
   opacity:calc(1 - var(--m,0));pointer-events:none}
 .em-atom-card{position:absolute;left:0;top:0;width:176px;height:56px;box-sizing:border-box;
   padding:5px 9px;pointer-events:none;opacity:clamp(0,calc((var(--m,0) - 0.5) * 2.4),1)}
-.em-atom[data-kind="决定"] .em-atom-body{border-left-color:#7ea9e0}
-.em-atom[data-kind="尝试"] .em-atom-body{border-left-color:#68c3ba}
-.em-atom[data-kind="结果"] .em-atom-body{border-left-color:#79c08c}
-.em-atom[data-kind="变更"] .em-atom-body{border-left-color:#d7a35f}
-.em-atom[data-kind="教训"] .em-atom-body{border-left-color:#d97c92}
+.em-atom[data-kind="决定"] .em-atom-body{--em-kind-color:#7ea9e0}
+.em-atom[data-kind="尝试"] .em-atom-body{--em-kind-color:#68c3ba}
+.em-atom[data-kind="结果"] .em-atom-body{--em-kind-color:#79c08c}
+.em-atom[data-kind="变更"] .em-atom-body{--em-kind-color:#d7a35f}
+.em-atom[data-kind="教训"] .em-atom-body{--em-kind-color:#d97c92}
 .em-atom:hover .em-atom-body{box-shadow:0 6px 18px color-mix(in srgb,var(--ui-base) 42%,transparent)}
 .em-atom[data-selected="1"] .em-atom-body{box-shadow:0 0 0 1.5px color-mix(in srgb,var(--ui-accent) 80%,transparent),0 10px 26px color-mix(in srgb,var(--ui-base) 50%,transparent)}
 .em-atom[data-edited="1"] .em-atom-body::after{content:'';position:absolute;inset:-1px;border-radius:inherit;padding:2px;pointer-events:none;
@@ -119,10 +120,65 @@ const CSS = `
   /* --ui-bg-input is #fcfcfc in both themes (host styles.css:314), so a native select
      stays white in dark mode; appearance:none is what stops the UA painting it. */
 .em-value{min-width:150px}
+.em-dd{position:relative;min-width:0}
+.em-dd-btn{width:100%;text-align:left;cursor:pointer;display:flex;justify-content:space-between;gap:12px;align-items:center}
+.em-dd-list{position:absolute;top:100%;left:0;right:0;z-index:50000;max-height:240px;overflow:auto;background:var(--ui-bg-elevated,var(--ui-bg-editor,#202329));border:1px solid var(--ui-stroke-secondary);border-radius:5px;box-shadow:0 8px 20px #0004}
+.em-dd-item{display:block;width:100%;text-align:left;padding:6px 8px;border:0;background:transparent;color:var(--ui-text-primary);font:inherit;cursor:pointer}
+.em-dd-item:hover,.em-dd-item[aria-selected="true"]{background:color-mix(in srgb,var(--ui-accent) 20%,transparent)}
 .em-check{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--ui-text-tertiary);cursor:pointer;user-select:none}
 .em-check input{accent-color:var(--ui-accent);margin:0}
 .em-counts{font-size:10.5px;color:var(--ui-text-quaternary);font-variant-numeric:tabular-nums}
 .em-spacer{flex:1}
+.em-fbtn{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:6px;cursor:pointer;
+  font-size:11px;line-height:1;background:transparent;color:var(--ui-text-tertiary);
+  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 70%,transparent)}
+.em-fbtn:hover{background:var(--chrome-action-hover);color:var(--ui-text-primary)}
+.em-fbtn[data-on="1"]{background:color-mix(in srgb,var(--ui-accent) 20%,transparent);color:var(--ui-text-primary);
+  border-color:color-mix(in srgb,var(--ui-accent) 55%,transparent)}
+.em-fbtn[disabled]{opacity:.5;cursor:default}
+.em-fbadge{font:700 9.5px/1 var(--font-mono,ui-monospace,monospace);padding:2px 4px;border-radius:999px;
+  background:color-mix(in srgb,var(--ui-accent) 34%,transparent);color:var(--ui-text-primary)}
+.em-panel{position:absolute;left:-1px;right:-1px;top:calc(100% + 6px);z-index:45000;padding:10px 12px;
+  border-radius:10px;border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 80%,transparent);
+  background:color-mix(in srgb,var(--ui-bg-elevated,var(--ui-bg-secondary,#202329)) 96%,transparent);box-shadow:0 18px 40px #0005;
+  display:grid;gap:8px}
+.em-panel-head{display:flex;align-items:baseline;gap:8px;font-size:11.5px;font-weight:650;color:var(--ui-text-primary)}
+.em-pgrid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:10px 18px;align-items:start}
+@media (max-width:760px){.em-pgrid{grid-template-columns:minmax(0,1fr)}}
+.em-pcol{display:grid;gap:6px;min-width:0}
+.em-ptitle{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ui-text-quaternary)}
+.em-prow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.em-plabel{font-size:10.5px;color:var(--ui-text-quaternary);min-width:24px}
+.em-pselect{flex:1 1 104px;min-width:96px}
+.em-input{height:24px;font-size:11px;padding:0 7px;border-radius:5px;background:var(--ui-bg-tertiary,var(--ui-bg-secondary,#202329));
+  color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);outline:none;min-width:0}
+.em-input:focus{border-color:color-mix(in srgb,var(--ui-accent) 60%,transparent)}
+.em-idinput{flex:1 1 120px;max-width:220px;font-family:var(--font-mono,ui-monospace,monospace)}
+.em-sem{display:flex;align-items:center;gap:5px;flex:1 1 240px;min-width:190px;max-width:430px}
+.em-seminput{flex:1}
+.em-semtag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ui-text-secondary);
+  padding:2px 4px 2px 7px;border-radius:999px;white-space:nowrap;
+  border:1px solid color-mix(in srgb,var(--ui-accent) 45%,transparent)}
+.em-fchip{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:1;padding:4px 8px;border-radius:999px;
+  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 80%,transparent);background:transparent;
+  color:var(--ui-text-tertiary);cursor:pointer}
+.em-fchip:hover{color:var(--ui-text-primary);background:var(--chrome-action-hover)}
+.em-fchip[data-on="1"]{color:var(--ui-text-primary);background:color-mix(in srgb,var(--ui-accent) 18%,transparent);
+  border-color:color-mix(in srgb,var(--ui-accent) 60%,transparent)}
+.em-fdot{width:7px;height:7px;border-radius:2px;display:inline-block;flex:0 0 auto}
+.em-fline{width:12px;height:2px;border-radius:1px;display:inline-block;flex:0 0 auto}
+.em-fline-dash{height:0;border-top:1.5px dashed;background:none!important}
+.em-hits{display:flex;flex-wrap:wrap;gap:5px;max-height:112px;overflow:auto}
+.em-hit{font:600 10px/1 var(--font-mono,ui-monospace,monospace);padding:4px 6px;border-radius:5px;white-space:nowrap;
+  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 80%,transparent);background:transparent;
+  color:var(--ui-text-secondary);cursor:pointer}
+.em-hit:hover{color:var(--ui-text-primary);border-color:color-mix(in srgb,var(--ui-accent) 55%,transparent)}
+.em-hit b{font-weight:700;color:var(--ui-text-primary)}
+.em-hintline{font-size:10.5px;color:var(--ui-text-quaternary);line-height:1.5}
+.em-warn{font-size:10.5px;color:#d0707f;line-height:1.5}
+.em-x-inline{padding:0;border:0;background:transparent;color:var(--ui-text-quaternary);cursor:pointer;font-size:10px;line-height:1}
+.em-x-inline:hover{color:var(--ui-text-primary)}
+
 .em-legend{position:absolute;left:12px;bottom:10px;z-index:40000;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
   padding:5px 8px;border-radius:8px;font-size:10px;color:var(--ui-text-tertiary);pointer-events:none;
   background:color-mix(in srgb,var(--ui-bg-primary) 62%,transparent);border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 45%,transparent)}
@@ -145,7 +201,7 @@ const CSS = `
 .em-field{display:flex;flex-direction:column;gap:4px}
 .em-label{font-size:10.5px;color:var(--ui-text-tertiary)}
 .em-textarea{width:100%;box-sizing:border-box;font-size:12px;line-height:1.5;padding:7px 8px;border-radius:6px;resize:vertical;
-  background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);outline:none;font-family:inherit}
+  background:var(--ui-bg-tertiary);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);outline:none;font-family:inherit;appearance:none;-webkit-appearance:none}
 .em-textarea:focus{border-color:var(--ui-accent)}
 .em-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .em-hint{font-size:10px;color:var(--ui-text-quaternary);line-height:1.4}
@@ -227,6 +283,308 @@ function shortSession(sid) {
   const m = /^(\d{8})_(\d{6})/.exec(sid)
   if (!m) return sid
   return `${m[1].slice(4, 6)}-${m[1].slice(6, 8)} ${m[2].slice(0, 2)}:${m[2].slice(2, 4)}:${m[2].slice(4, 6)}`
+}
+
+// --------------------------------------------------------------------------- filtering
+
+//: 序号输入：12 / #12 / 30-42 / 12, 30-42, #56。范围上限 2000，手滑打 1-999999 不会卡死。
+function parseIdSpec(text) {
+  const ids = new Set()
+  const bad = []
+  for (const raw of String(text || '').split(/[\s,，、;；]+/)) {
+    if (!raw) continue
+    const token = raw.replace(/^#/, '')
+    if (!token) {
+      bad.push(raw)
+      continue
+    }
+    const range = /^(\d+)\s*[-~–—]\s*(\d+)$/.exec(token)
+    if (range) {
+      let a = Number(range[1])
+      let b = Number(range[2])
+      if (a > b) {
+        const t = a
+        a = b
+        b = t
+      }
+      if (b - a > 2000) {
+        bad.push(raw)
+        continue
+      }
+      for (let i = a; i <= b; i += 1) ids.add(i)
+      continue
+    }
+    if (/^\d+$/.test(token)) {
+      ids.add(Number(token))
+      continue
+    }
+    bad.push(raw)
+  }
+  return { ids, bad }
+}
+
+function atomPasses(ev, filters, idSet, semIds, semActive) {
+  if (filters.project && (ev.project || '未归类') !== filters.project) return false
+  if (filters.session && ev.session !== filters.session) return false
+  if (filters.date && dayKey(ev.ts) !== filters.date) return false
+  if (filters.kinds.length && !filters.kinds.includes(ev.kind)) return false
+  if (idSet && idSet.size && !idSet.has(ev.id)) return false
+  if (semActive && !(semIds && semIds.has(ev.id))) return false
+  return true
+}
+
+const edgeRelKey = e => (e.kind === 'none' ? 'none' : e.rel)
+
+/**
+ * 所有筛选条件同时生效（AND）：
+ *   - 原子维度（项目/会话/日期/类型/序号/语义）决定哪些原子算「命中」；
+ *   - 关系维度决定哪些边参与：选了关系之后，原子还必须落在这类边的端点上。
+ * 返回的 focus 是最终留在舞台上的集合；mode=neighbors 时把命中集的一跳邻居也拉进来。
+ */
+function computeFilterInfo({ events, edges, filters, idSet, semIds, semActive, mode, pulled }) {
+  const relSet = filters.rels.length ? new Set(filters.rels) : null
+  const atomActive = Boolean(
+    filters.project || filters.session || filters.date || filters.kinds.length ||
+    (idSet && idSet.size) || semActive
+  )
+  if (!atomActive && !relSet) {
+    return { active: false, match: new Set(), focus: new Set(), promo: new Set(),
+      count: 0, edgeCount: 0, atomActive: false, relActive: false }
+  }
+  const pool = new Set()
+  if (relSet) {
+    for (const e of edges) {
+      if (!relSet.has(edgeRelKey(e))) continue
+      pool.add(e.src)
+      pool.add(e.dst)
+    }
+  }
+  const match = new Set()
+  for (const ev of events) {
+    if (!atomPasses(ev, filters, idSet, semIds, semActive)) continue
+    if (relSet && !pool.has(ev.id)) continue
+    match.add(ev.id)
+  }
+  const focus = new Set(match)
+  if (mode === 'neighbors') {
+    for (const e of edges) {
+      if (relSet && !relSet.has(edgeRelKey(e))) continue
+      if (match.has(e.src) || match.has(e.dst)) {
+        focus.add(e.src)
+        focus.add(e.dst)
+      }
+    }
+  }
+  if (pulled) for (const id of pulled) focus.add(id)
+  let edgeCount = 0
+  for (const e of edges) {
+    if (relSet && !relSet.has(edgeRelKey(e))) continue
+    if (focus.has(e.src) && focus.has(e.dst)) edgeCount += 1
+  }
+  return {
+    active: true,
+    match,
+    focus,
+    promo: new Set([...focus].filter(id => !match.has(id))),
+    count: match.size,
+    edgeCount,
+    atomActive,
+    relActive: Boolean(relSet)
+  }
+}
+
+const toggleValue = (list, v) => (list.includes(v) ? list.filter(x => x !== v) : [...list, v])
+
+function FilterChip({ on, onClick, dot, line, dash, title, children }) {
+  return jsxs('button', {
+    type: 'button',
+    className: 'em-fchip',
+    'data-on': on ? '1' : '0',
+    title,
+    onClick,
+    children: [
+      dot ? jsx('span', { className: 'em-fdot', style: { background: dot } }) : null,
+      line
+        ? jsx('span', {
+            className: dash ? 'em-fline em-fline-dash' : 'em-fline',
+            style: dash ? { borderColor: line } : { background: line }
+          })
+        : null,
+      children
+    ]
+  })
+}
+
+function FilterPanel({
+  filters,
+  patch,
+  projectOptions,
+  sessionOptions,
+  dateOptions,
+  idSpec,
+  idUnknown,
+  onIdEnter,
+  sem,
+  semTop,
+  setSemTop,
+  onSelectHit,
+  onClearSemantic,
+  vectorCount,
+  activeCount,
+  onClearAll
+}) {
+  const hits = sem && !sem.error ? sem.hits : []
+  return jsxs('div', {
+    className: 'em-panel',
+    children: [
+      jsxs('div', {
+        className: 'em-panel-head',
+        children: [
+          '筛选',
+          jsx('span', { className: 'em-hint', children: '所有条件同时生效（AND）· 不选 = 不限' }),
+          jsx('span', { className: 'em-spacer' }),
+          activeCount ? jsx('button', { type: 'button', className: 'em-fbtn', onClick: onClearAll, children: '清除全部' }) : null
+        ]
+      }),
+      jsxs('div', {
+        className: 'em-pgrid',
+        children: [
+          jsxs('div', {
+            className: 'em-pcol',
+            children: [
+              jsx('div', { className: 'em-ptitle', children: '记忆原子' }),
+              jsxs('div', {
+                className: 'em-prow',
+                children: [
+                  jsx(GraphSelect, { className: 'em-pselect', value: filters.project, options: projectOptions,
+                    onChange: v => patch({ project: v }) }),
+                  jsx(GraphSelect, { className: 'em-pselect', value: filters.session, options: sessionOptions,
+                    onChange: v => patch({ session: v }) }),
+                  jsx(GraphSelect, { className: 'em-pselect', value: filters.date, options: dateOptions,
+                    onChange: v => patch({ date: v }) })
+                ]
+              }),
+              jsxs('div', {
+                className: 'em-prow',
+                children: [
+                  jsx('span', { className: 'em-plabel', children: '类型' }),
+                  ...KINDS.map(k =>
+                    jsx(FilterChip, {
+                      on: filters.kinds.includes(k),
+                      dot: KIND_COLORS[k],
+                      title: `只看「${k}」`,
+                      onClick: () => patch({ kinds: toggleValue(filters.kinds, k) }),
+                      children: k
+                    }, k)
+                  )
+                ]
+              }),
+              jsxs('div', {
+                className: 'em-prow',
+                children: [
+                  jsx('span', { className: 'em-plabel', children: '序号' }),
+                  jsx('input', {
+                    className: 'em-input em-idinput',
+                    value: filters.ids,
+                    placeholder: '12, 30-42, #56',
+                    onChange: e => patch({ ids: e.target.value }),
+                    onKeyDown: e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        onIdEnter()
+                      }
+                    }
+                  }),
+                  idSpec.ids.size ? jsx('span', { className: 'em-hintline', children: `识别 ${idSpec.ids.size} 个序号` }) : null,
+                  idSpec.bad.length
+                    ? jsx('span', { className: 'em-warn', children: `无法识别：${idSpec.bad.slice(0, 3).join(' ')}` })
+                    : null,
+                  idUnknown ? jsx('span', { className: 'em-warn', children: `${idUnknown} 个不在图中` }) : null
+                ]
+              }),
+              jsx('div', { className: 'em-hintline', children: '序号命中唯一一条时按回车，镜头直接飞过去。' })
+            ]
+          }),
+          jsxs('div', {
+            className: 'em-pcol',
+            children: [
+              jsx('div', { className: 'em-ptitle', children: '关系边' }),
+              jsxs('div', {
+                className: 'em-prow',
+                children: [
+                  ...RELS.map(r =>
+                    jsx(FilterChip, {
+                      on: filters.rels.includes(r),
+                      line: REL_COLORS[r],
+                      title: `只看「${r}」`,
+                      onClick: () => patch({ rels: toggleValue(filters.rels, r) }),
+                      children: r
+                    }, r)
+                  ),
+                  jsx(FilterChip, {
+                    on: filters.rels.includes('none'),
+                    line: NONE_COLOR,
+                    dash: true,
+                    title: '只看判定为无关系的灰边',
+                    onClick: () => patch({ rels: toggleValue(filters.rels, 'none') }),
+                    children: '无'
+                  })
+                ]
+              }),
+              jsx('div', { className: 'em-ptitle', children: '语义检索' }),
+              jsxs('div', {
+                className: 'em-prow',
+                children: [
+                  jsx(GraphSelect, {
+                    className: 'em-pselect',
+                    value: String(semTop),
+                    onChange: v => setSemTop(Number(v)),
+                    options: [8, 16, 32, 64, 128].map(n => ({ value: String(n), label: `Top ${n}` }))
+                  }),
+                  jsx('span', { className: 'em-hintline', children: 'Embedding 相似度，与上面的条件取交集' }),
+                  vectorCount ? null : jsx('span', { className: 'em-warn', children: '库里还没有事件向量' })
+                ]
+              }),
+              sem && sem.error ? jsx('div', { className: 'em-warn', children: sem.error }) : null,
+              sem && !sem.error
+                ? jsxs('div', {
+                    className: 'em-hintline',
+                    children: [
+                      `「${sem.q}」${sem.hits.length ? `命中 ${sem.hits.length} 条` : '没有命中'}`,
+                      Number.isFinite(sem.scanned) ? ` · 扫描 ${sem.scanned} 条向量` : '',
+                      sem.skipped ? ` · 跳过 ${sem.skipped} 条` : ''
+                    ]
+                  })
+                : null,
+              hits.length
+                ? jsx('div', {
+                    className: 'em-hits',
+                    children: hits.slice(0, 24).map(h =>
+                      jsx('button', {
+                        type: 'button',
+                        className: 'em-hit',
+                        title: `选中 #${h.id}`,
+                        onClick: () => onSelectHit(h.id),
+                        children: [`#${h.id} `, jsx('b', { children: h.score.toFixed(3) })]
+                      }, h.id)
+                    )
+                  })
+                : null,
+              sem && sem.q && !sem.error && !sem.hits.length
+                ? jsx('div', { className: 'em-hintline', children: '换个说法试试，或把 Top 调大。' })
+                : null,
+              sem
+                ? jsx('div', {
+                    className: 'em-prow',
+                    children: jsx('button', { type: 'button', className: 'em-fbtn', onClick: onClearSemantic, children: '清除语义筛选' })
+                  })
+                : null
+            ]
+          })
+        ]
+      })
+    ]
+  })
 }
 
 // --------------------------------------------------------------------------- scene layout
@@ -349,13 +707,25 @@ function buildScene(data, pos) {
   return { atoms, byId, edges, radius, newestId: seed ? seed.id : null, projects: [...new Set(atoms.map(a => a.project))].sort() }
 }
 
+function placeEdgeLabels(labels) {
+  const kept = []
+  for (const label of [...labels].sort((a,b) => Number(Boolean(b.selected)) - Number(Boolean(a.selected)))) {
+    const width = Math.max(18, label.text.length * label.size) + 8
+    const overlap = kept.some(other =>
+      Math.abs(other.x - label.x) < (other.width + width) / 2 &&
+      Math.abs(other.y - label.y) < (other.size + label.size) / 2 + 5)
+    if (!overlap || label.selected) kept.push({ ...label, width })
+  }
+  return kept
+}
+
 function fitDistance(radius, aspect, fovDeg = FOV_DEG) {
   const half = ((fovDeg / 2) * Math.PI) / 180
   const horizontal = Math.atan(Math.tan(half) * Math.max(0.45, aspect))
   return (radius * 1.12) / Math.sin(Math.min(half, horizontal))
 }
 
-function animateCamera(cam, patch, ms = 520) {
+function animateCamera(cam, patch, ms = 520, delay = 0) {
   const to = {
     yaw: cam.yaw,
     pitch: cam.pitch,
@@ -368,7 +738,7 @@ function animateCamera(cam, patch, ms = 520) {
     ...patch
   }
   cam.anim = {
-    t0: performance.now(),
+    t0: performance.now() + delay,
     ms,
     from: {
       yaw: cam.yaw,
@@ -439,12 +809,16 @@ function Scene({
   const haloRef = useRef('#0f1115')
   // 选中时只留焦点邻域，其余原子整个收起来；按 (选择, 过滤器, 场景) 身份缓存。
   const visRef = useRef({ key: '', fi: null, scene: null, set: null })
-  // 选中原子时真正摆到镜头前的那一圈邻居：只有它们上舞台，其余在右侧列表里点。
+  // All direct neighbors remain visible; a bounded sample of both layers is pulled out.
   const ringRef = useRef(null)
+  const retreatEndRef = useRef(0)
+  const fadeRef = useRef({ key: null, scene: null, values: new Map(), t: 0 })
+  const avoidRef = useRef(null)
   const hitRef = useRef([])
   const dragRef = useRef(null)
   const movedRef = useRef(0)
   const atomAnims = useRef(new Map())
+  const flightRef = useRef({ velocity: 0, last: null })
   const lastReqRef = useRef(0)
   const sceneRef = useRef(scene)
   sceneRef.current = scene
@@ -460,6 +834,19 @@ function Scene({
   useEffect(() => {
     camRef.current.dirty = true
   }, [focusInfo, sel, camRef])
+
+  // Closing an active inspector relinquishes its scheduled pull, without cancelling
+  // unrelated reset-view camera animations when no inspector was open.
+  const previousSelRef = useRef(sel)
+  useEffect(() => {
+    const previous = previousSelRef.current
+    previousSelRef.current = sel
+    if (sel || !previous) return
+    const ids = [...atomAnims.current].filter(([, anim]) => anim.changed).map(([id]) => id)
+    atomAnims.current.clear()
+    camRef.current.anim = null
+    if (ids.length) handlersRef.current.onMoved(ids)
+  }, [sel, camRef])
 
   const setAtomEl = useCallback((id, el) => {
     if (el) atomEls.current.set(id, el)
@@ -489,12 +876,13 @@ function Scene({
       if (!cam.ready) {
         cam.ready = true
         cam.startDist = START_DIST
-        // 开局先看全貌：整个云团缩成一屏编号小球，点了再飞进去。
-        cam.dist = Math.max(START_DIST, cam.fit)
+        // 相机眼睛落在最新原子处，视点在眼前；滚轮始终平移眼睛和视点。
+        cam.dist = START_DIST
         const seed = scene.byId.get(scene.newestId)
-        cam.fx = seed ? seed.x : 0
-        cam.fy = seed ? seed.y : 0
-        cam.fz = seed ? seed.z : 0
+        const b = cameraBasis(cam)
+        cam.fx = (seed ? seed.x : 0) + b.fx * cam.dist
+        cam.fy = (seed ? seed.y : 0) + b.fy * cam.dist
+        cam.fz = (seed ? seed.z : 0) + b.fz * cam.dist
       }
       const cs = getComputedStyle(document.documentElement)
       haloRef.current = cs.getPropertyValue('--ui-bg-primary').trim() || '#0f1115'
@@ -512,6 +900,19 @@ function Scene({
     const tick = now => {
       raf = requestAnimationFrame(tick)
       const cam = camRef.current
+      const flight = flightRef.current
+      const dt = flight.last === null ? 0.016 : clamp((now - flight.last) / 1000, 0, 0.05)
+      flight.last = now
+      if (Math.abs(flight.velocity) > 0.0001) {
+        const b = cameraBasis(cam)
+        const decay = Math.exp(-dt / 0.18)
+        const distance = flight.velocity * 0.18 * (1 - decay)
+        cam.fx += b.fx * distance
+        cam.fy += b.fy * distance
+        cam.fz += b.fz * distance
+        flight.velocity *= decay
+        cam.dirty = true
+      } else flight.velocity = 0
       if (cam.anim) {
         const { t0, ms, from, to } = cam.anim
         const t = clamp((now - t0) / ms, 0, 1)
@@ -538,9 +939,12 @@ function Scene({
           atom.x = a.from.x + (a.to.x - a.from.x) * e
           atom.y = a.from.y + (a.to.y - a.from.y) * e
           atom.z = a.from.z + (a.to.z - a.from.z) * e
-          posRef.current.set(id, { x: atom.x, y: atom.y, z: atom.z })
+          if (p > 0 && Math.hypot(atom.x-a.from.x, atom.y-a.from.y, atom.z-a.from.z) > 1e-8) {
+            a.changed = true
+            posRef.current.set(id, { x: atom.x, y: atom.y, z: atom.z })
+          }
           if (p >= 1) {
-            done.push(id)
+            if (a.changed) done.push(id)
             anims.delete(id)
           }
         }
@@ -548,6 +952,8 @@ function Scene({
         if (done.length) handlersRef.current.onMoved(done)
       }
 
+      // Display drift requires continuous redraw, but never changes stored positions.
+      cam.dirty = true
       if (!cam.dirty) return
       cam.dirty = false
       draw(now, cam)
@@ -573,7 +979,8 @@ function Scene({
         // Clamp at the near plane instead of returning null: a point that slides behind the
         // camera then projects far off-screen, so the edge to it exits the view smoothly
         // instead of the whole edge vanishing and reappearing while the camera orbits.
-        const zc = Math.max(vx * b.fx + vy * b.fy + vz * b.fz, 0.35)
+        const depth = vx * b.fx + vy * b.fy + vz * b.fz
+        const zc = Math.max(depth, 0.35)
         const xc = vx * b.rx + vz * b.rz
         const yc = vx * b.ux + vy * b.uy + vz * b.uz
         const unit = focal / zc
@@ -581,6 +988,8 @@ function Scene({
           x: w / 2 + xc * unit + panX,
           y: h / 2 - yc * unit + panY,
           z: zc,
+          depth,
+          distance: Math.hypot(vx, vy, vz),
           unit,
           k: clamp(startDist / zc, 0.3, 1.55)
         }
@@ -603,6 +1012,7 @@ function Scene({
             if (ringRef.current) for (const id of ringRef.current) set.add(id)
             else {
               for (const e of scene.edges) {
+                if (e.kind !== 'rel') continue
                 if (e.src === selNow.id) set.add(e.dst)
                 else if (e.dst === selNow.id) set.add(e.src)
               }
@@ -618,25 +1028,82 @@ function Scene({
         }
       }
       const shown = vis.set
+      const fade = fadeRef.current
+      const fresh = fade.scene !== scene
+      const targetAlpha = id => {
+        if (!shown || shown.has(id)) return 1
+        const target = selNow && !active ? 0.28 : 0
+        // The entire cloud stays put until the retreat has completed. Thereafter
+        // dimming and display-only avoidance share the same continuous ramp.
+        if (selNow && selNow.type === 'atom')
+          return 1 + (target - 1) * smoothstep(0, 450, now - retreatEndRef.current)
+        return target
+      }
+      if (fresh || fade.key !== wantKey || fade.shown !== shown) {
+        const previous = fade.values
+        fade.from = new Map(scene.atoms.map(atom => [atom.id, fresh ? targetAlpha(atom.id) : (previous.get(atom.id) ?? 0)]))
+        fade.scene = scene
+        fade.key = wantKey
+        fade.shown = shown
+        fade.t = now
+      }
+      const fadeT = clamp((now - fade.t) / 450, 0, 1)
+      if (fadeT < 1) cam.dirty = true
+      const alphaFor = id => {
+        const target = targetAlpha(id)
+        const alpha = (fade.from.get(id) ?? target) + (target - (fade.from.get(id) ?? target)) * smoothstep(0, 1, fadeT)
+        fade.values.set(id, alpha)
+        return alpha
+      }
+
+      const selectedCenter = selNow && selNow.type === 'atom' ? scene.byId.get(selNow.id) : null
+      if (selectedCenter) avoidRef.current = { x: selectedCenter.x, y: selectedCenter.y, z: selectedCenter.z }
+      const avoidCenter = selectedCenter || (!selNow && !active && fadeT < 1 ? avoidRef.current : null)
+      const world = new Map()
+      const stableWorld = new Map()
+      for (const atom of scene.atoms) {
+        let x = atom.x, y = atom.y, z = atom.z
+        if (avoidCenter && (!shown || !shown.has(atom.id))) {
+          const dx = atom.x - avoidCenter.x, dy = atom.y - avoidCenter.y, dz = atom.z - avoidCenter.z
+          const d = Math.hypot(dx, dy, dz)
+          if (d > 0.001 && d < 7) {
+            const amount = (1 - smoothstep(0, 7, d)) * 1.5 * (1 - alphaFor(atom.id)) / 0.72 / d
+            x += dx * amount; y += dy * amount; z += dz * amount
+          }
+        }
+        stableWorld.set(atom.id, { x, y, z })
+        const phase = atom.id * 2.399963, seconds = now / 1000
+        const distance = Math.hypot(x - b.ex, y - b.ey, z - b.ez)
+        const drift = 0.025 * (1 / 3 + 2 / 3 * smoothstep(SCALE_REF / 0.72, 12, distance))
+        world.set(atom.id, { x: x + drift * Math.sin(seconds * 0.47 + phase),
+          y: y + drift * Math.sin(seconds * 0.39 + phase * 1.7),
+          z: z + drift * Math.cos(seconds * 0.43 + phase) })
+      }
 
       const positions = new Map()
       for (const atom of scene.atoms) {
         const el = atomEls.current.get(atom.id)
-        if (shown && !shown.has(atom.id)) {
+        const visibility = alphaFor(atom.id)
+        if (visibility <= 0.001) {
           positions.set(atom.id, null)
           if (el) el.style.display = 'none'
           continue
         }
-        const p = project(atom)
-        if (p.x < -4000 || p.x > w + 4000 || p.y < -4000 || p.y > h + 4000) {
+        const p = project(world.get(atom.id))
+        const stable = project(stableWorld.get(atom.id))
+        if (stable.x < -4000 || stable.x > w + 4000 || stable.y < -4000 || stable.y > h + 4000) {
           positions.set(atom.id, null)
           if (el) el.style.display = 'none'
           continue
         }
         const isSelAtom = selNow && selNow.type === 'atom' && selNow.id === atom.id
-        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, k: p.k, el, isSelAtom })
+        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, depth: p.depth, distance: stable.distance, stable, k: p.k, el, isSelAtom, visibility })
         if (!el) continue
-        el.style.display = ''
+        const nearOpacity = smoothstep(0.05, 0.65, stable.depth)
+        const opacity = nearOpacity * visibility
+        el.style.display = opacity > 0.001 ? '' : 'none'
+        el.style.opacity = String(opacity)
+        el.style.pointerEvents = opacity > 0.5 && (!shown || shown.has(atom.id) || (selNow && selNow.type === 'atom' && visibility > 0.5)) ? '' : 'none'
         el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%)`
         el.dataset.selected = isSelAtom ? '1' : '0'
         el.style.zIndex = isSelAtom ? '34000' : String(Math.round(20000 - p.z * 100))
@@ -646,14 +1113,28 @@ function Scene({
       // 否则几百张卡会互相压住。（排名变化是连续的，过渡带也做了衰减，不会跳。）
       const CARD_BUDGET = 46
       const ranked = []
-      for (const [id, p] of positions) if (p && p.el) ranked.push(p)
-      ranked.sort((a, b) => a.z - b.z)
+      for (const [id, p] of positions) if (p && p.el) {
+        // Behind-eye and off-screen nodes cannot consume the on-screen card budget.
+        p.w = 20
+        p.h = 20
+        if (p.stable.depth > 0.35 && p.stable.x >= -88 && p.stable.x <= w + 88 && p.stable.y >= -28 && p.stable.y <= h + 28) ranked.push(p)
+        else p.el.style.setProperty('--m', '0')
+      }
+      ranked.sort((a, b) => a.distance - b.distance)
       for (let i = 0; i < ranked.length; i += 1) {
         const p = ranked[i]
-        // One number drives the whole morph: 0 = 20px ball, 1 = 176x56 card. Continuous in
-        // distance, so the shape is a real transform rather than a switch between layouts.
-        let m = smoothstep(0.3, 0.72, clamp(p.k, 0.26, 1.06))
-        if (i >= CARD_BUDGET) m *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
+        p.baseMorph = smoothstep(0.3, 0.72, clamp(startDist / Math.max(p.distance, 0.01), 0.26, 1.06))
+        if (i >= CARD_BUDGET) p.baseMorph *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
+      }
+      for (const p of ranked) {
+        // Smoothly share the card space when near-equal depths exchange order.
+        let m = p.baseMorph
+        for (const q of ranked) {
+          if (q === p || q.baseMorph < 0.1) continue
+          const separation = Math.max(Math.abs(p.stable.x - q.stable.x) / 176, Math.abs(p.stable.y - q.stable.y) / 56)
+          const priority = smoothstep(-0.3, 0.3, p.distance - q.distance)
+          m *= 1 - priority * smoothstep(0.1, 0.5, q.baseMorph) * (1 - smoothstep(0.55, 1.08, separation))
+        }
         p.m = m
         p.w = 20 + 156 * m
         p.h = 20 + 36 * m
@@ -704,12 +1185,24 @@ function Scene({
       let selEdge = null
 
       for (const edge of scene.edges) {
-        const a = positions.get(edge.src)
-        const c = positions.get(edge.dst)
-        if (!a || !c) continue
+        let a = positions.get(edge.src)
+        let c = positions.get(edge.dst)
+        if (!a || !c || (a.depth <= 0.35 && c.depth <= 0.35)) continue
+        // Clip the world-space segment at the near plane before projecting; clamping a
+        // behind-eye endpoint independently invents a false line across the viewport.
+        if (a.depth < 0.35 || c.depth < 0.35) {
+          const aa = world.get(edge.src), cc = world.get(edge.dst)
+          const t = (0.35 - a.depth) / (c.depth - a.depth)
+          const clipped = project({ x: aa.x + (cc.x-aa.x)*t, y: aa.y + (cc.y-aa.y)*t, z: aa.z + (cc.z-aa.z)*t })
+          const point = { ...clipped, w: 0, h: 0, visibility: Math.min(a.visibility, c.visibility) }
+          if (a.depth < 0.35) a = point
+          else c = point
+        }
+        const edgeVisibility = Math.min(a.visibility, c.visibility)
         const isSel = selKey === edge.key
-        if (!isSel && coarse && !sampleEdge(edge, 4)) continue
-        if (!isSel && midCoarse && !sampleEdge(edge, 2)) continue
+        const hot = selNow && selNow.type === 'atom' && edge.kind === 'rel' && (edge.src === selNow.id || edge.dst === selNow.id)
+        if (!isSel && !hot && coarse && !sampleEdge(edge, 4)) continue
+        if (!isSel && !hot && midCoarse && !sampleEdge(edge, 2)) continue
         const offP = p => p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80
         if (!isSel && offP(a) && offP(c)) continue
 
@@ -735,16 +1228,17 @@ function Scene({
           ? Math.max(0.16 * crossFade, coarse ? 0.12 : 0.09)
           : 0.17 * crossFade * depthFade
 
-        screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
+        const clickableEndpoint = p => p.depth > 0.35 && p.visibility > 0.5 && p.el && p.el.style.pointerEvents !== 'none'
+        if (edgeVisibility > 0.5 && clickableEndpoint(a) && clickableEndpoint(c))
+          screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
 
-        const hot = selNow && selNow.type === 'atom' && (edge.src === selNow.id || edge.dst === selNow.id)
         if (isSel) {
           selEdge = { color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width }
         } else if (hot) {
           // 选中原子时，它连着的每条线都提到前层高光，便于看清“它连去了哪”。
-          hotEdges.push({ color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width: Math.max(width, 1.4) })
+          hotEdges.push({ color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width: Math.max(width, 1.4), visibility: edgeVisibility })
         } else if (back) {
-          const op = Math.round(baseOpacity * 100) / 100
+          const op = Math.round(baseOpacity * edgeVisibility * 100) / 100
           const wd = Math.round(width * 2) / 2
           const bucketKey = `${color}|${op}|${wd}`
           let bucket = buckets.get(bucketKey)
@@ -756,7 +1250,7 @@ function Scene({
           bucket.path.quadraticCurveTo(ctlX, ctlY, C.x, C.y)
         }
 
-        const incident = selNow && selNow.type === 'atom' && (edge.src === selNow.id || edge.dst === selNow.id)
+        const incident = selNow && selNow.type === 'atom' && edge.kind === 'rel' && (edge.src === selNow.id || edge.dst === selNow.id)
         const visible = isSel || (incident && len < 460) || (labelsOn && len > 120)
         if (!visible) continue
         labels.push({
@@ -788,10 +1282,10 @@ function Scene({
           path.moveTo(h.x1, h.y1)
           path.quadraticCurveTo(h.cx, h.cy, h.x2, h.y2)
           front.strokeStyle = h.color
-          front.globalAlpha = 0.18
+          front.globalAlpha = 0.18 * h.visibility
           front.lineWidth = h.width * 3.6
           front.stroke(path)
-          front.globalAlpha = 0.95
+          front.globalAlpha = 0.95 * h.visibility
           front.lineWidth = h.width
           front.stroke(path)
         }
@@ -817,7 +1311,7 @@ function Scene({
         front.textAlign = 'center'
         front.textBaseline = 'alphabetic'
         front.lineJoin = 'round'
-        for (const lb of labels) {
+        for (const lb of placeEdgeLabels(labels)) {
           front.font = `600 ${lb.size.toFixed(1)}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
           front.globalAlpha = 0.9
           front.lineWidth = 3
@@ -837,7 +1331,8 @@ function Scene({
     return () => cancelAnimationFrame(raf)
   }, [scene, camRef, posRef])
 
-  // 点原子/点边 = 相机飞过去 + 把原子往镜头前拉。拉完就留在那儿，取消选中不回弹。
+  // Select an atom: highlight, retreat to fit all direct neighbors, then expand layers.
+  // Explicit pulls persist; display drift and avoidance never change stored coordinates.
   useEffect(() => {
     const req = focusReq
     if (!req || !scene) return
@@ -846,69 +1341,87 @@ function Scene({
     if (!w || !h) return
     lastReqRef.current = req.seq
     const cam = camRef.current
+    flightRef.current.velocity = 0
+    // A new selection owns the motion: persist the current partial positions before
+    // replacing the previous trajectories, never let old pulls continue in the background.
+    const interrupted = [...atomAnims.current].filter(([, anim]) => anim.changed).map(([id]) => id)
+    atomAnims.current.clear()
+    if (interrupted.length) handlersRef.current.onMoved(interrupted)
+    ringRef.current = null
     const b = cameraBasis(cam)
     const focal = h / 2 / Math.tan(FOV / 2)
     const usableW = Math.max(320, w - 404)
     // 检查器占右边 404px：把投影中心左移，焦点才落在「真正可用」的画面中间。
     const panX = usableW / 2 - w / 2
     const D = FOCUS_DIST
-    const startAnim = (atom, to) =>
+    const startAnim = (atom, to, delay = 0) =>
       atomAnims.current.set(atom.id, {
         from: { x: atom.x, y: atom.y, z: atom.z },
         to,
-        t0: performance.now(),
-        ms: 480
+        t0: performance.now() + delay,
+        ms: 720
       })
 
     if (req.mode === 'atom') {
       const a = scene.byId.get(req.id)
       if (!a) return
-      const to = { x: a.x + b.fx * PULL_IN, y: a.y + b.fy * PULL_IN, z: a.z + b.fz * PULL_IN }
-      startAnim(a, to)
-      animateCamera(cam, { fx: to.x, fy: to.y, fz: to.z, dist: D, panX, panY: 0 }, 820)
-
-      const seen = new Set()
-      const links = []
+      // 后撤至当前星团之外，再按图距离依次拉开两层；保持每个方向的三维分量。
+      // Keep the focus anchored. Fixed shell radii make repeat expansion idempotent;
+      // using the current cloud radius (or multiplying offsets) creates runaway growth.
+      const to = { x: a.x, y: a.y, z: a.z }
+      // Expand a deterministic sample of true relationships, leaving the full edge list
+      // untouched for the inspector. Give both layers room even for high-degree nodes.
+      const adjacency = new Map()
       for (const e of scene.edges) {
-        const other = e.src === a.id ? e.dst : e.dst === a.id ? e.src : null
-        if (other == null || seen.has(other)) continue
-        seen.add(other)
-        links.push({ id: other, conf: e.conf || 0 })
+        if (e.kind !== 'rel') continue
+        if (!adjacency.has(e.src)) adjacency.set(e.src, new Set())
+        if (!adjacency.has(e.dst)) adjacency.set(e.dst, new Set())
+        adjacency.get(e.src).add(e.dst)
+        adjacency.get(e.dst).add(e.src)
       }
-      links.sort((x, y) => y.conf - x.conf)
-
-      // 3D 收拢：每个邻居沿「它→焦点」的方向被拉近，直到投影落进可视区。
-      // 方向不变，所以云团还是三维的——不是把大家摊到一张平面上的环形菜单。
-      const mates = links.map(link => scene.byId.get(link.id)).filter(Boolean).slice(0, 26)
-      const maxR = Math.min(usableW * 0.42, h * 0.4, 380)
-      // 两圈：装得下的才算，装不下的留在原地（右侧列表里仍可点），避免卡片互相压住。
-      const perRing = Math.max(3, Math.floor((Math.PI * 2 * maxR) / 205))
-      const outer = mates.slice(0, perRing)
-      const inner = mates.slice(perRing, perRing + Math.max(2, Math.floor(perRing * 0.6)))
-      const picked = [...outer, ...inner]
-      ringRef.current = new Set([a.id, ...picked.map(m => m.id)])
-      for (const [i, mate] of picked.entries()) {
-        const dx = mate.x - to.x
-        const dy = mate.y - to.y
-        const dz = mate.z - to.z
-        // 先投影：它此刻在屏幕上离焦点多远
-        const sxw = dx * b.rx + dy * b.ry + dz * b.rz
-        const syw = dx * b.ux + dy * b.uy + dz * b.uz
-        const zc = Math.max(D + (dx * b.fx + dy * b.fy + dz * b.fz), 0.4)
-        const r = Math.hypot((sxw * focal) / zc, (-syw * focal) / zc)
-        const band = i < outer.length ? maxR : maxR * 0.62
-        // Scaling the whole offset also changes its depth, so the projected radius is not
-        // linear in t — solve it by iteration, otherwise deep neighbours overshoot the edge.
-        let t = r < 1 ? 1 : clamp(band / r, 0.05, 3)
-        if (r >= 1) {
-          const dz0 = dx * b.fx + dy * b.fy + dz * b.fz
-          for (let it = 0; it < 3; it += 1) {
-            const zc2 = Math.max(D + dz0 * t, 0.4)
-            const projected = t * r * (zc / zc2)
-            t = clamp(t * (band / Math.max(projected, 1)), 0.05, 3)
-          }
-        }
-        startAnim(mate, { x: to.x + dx * t, y: to.y + dy * t, z: to.z + dz * t })
+      const direct = [...(adjacency.get(a.id) || [])].filter(id => scene.byId.has(id)).sort((x,y) => x-y)
+      // Fit the actual 3D positions of every direct neighbor before moving them.
+      // Depth matters: a neighbor nearer the eye needs more retreat than one behind.
+      let retreat = Math.max(FOCUS_DIST, fitDistance(5, usableW / h))
+      for (const id of direct) {
+        const mate = scene.byId.get(id)
+        const dx = mate.x - to.x, dy = mate.y - to.y, dz = mate.z - to.z
+        const forward = dx*b.fx + dy*b.fy + dz*b.fz
+        const horizontal = Math.abs(dx*b.rx + dy*b.ry + dz*b.rz)
+        const vertical = Math.abs(dx*b.ux + dy*b.uy + dz*b.uz)
+        retreat = Math.max(retreat, 0.75 - forward,
+          focal * horizontal / Math.max(1, usableW / 2 - 30) - forward,
+          focal * vertical / Math.max(1, h / 2 - 30) - forward)
+      }
+      animateCamera(cam, { fx: to.x, fy: to.y, fz: to.z, dist: retreat, panX, panY: 0 }, 800, 250)
+      retreatEndRef.current = performance.now() + 1050
+      const directSet = new Set(direct)
+      const first = direct.slice(0, 16)
+      const second = new Set()
+      for (const id of first) for (const other of adjacency.get(id) || []) {
+        if (other !== a.id && !directSet.has(other) && scene.byId.has(other)) second.add(other)
+      }
+      const levels = new Map([[a.id, 0]])
+      for (const id of first) levels.set(id, 1)
+      for (const id of [...second].sort((x,y) => x-y).slice(0, 16)) levels.set(id, 2)
+      ringRef.current = new Set([a.id, ...direct, ...levels.keys()])
+      for (const [id, depth] of levels) {
+        if (!depth) continue
+        const mate = scene.byId.get(id)
+        const layer = depth === 1 ? first : [...levels].filter(([,d]) => d === 2).map(([i]) => i)
+        const index = layer.indexOf(id)
+        // Fibonacci sphere slots keep the layers volumetric rather than flattening
+        // them into camera-facing rings. Stable slots make repeat expansion settle.
+        const angle = index * 2.399963229728653 + depth * 0.7
+        const z = 1 - 2 * (index + 0.5) / layer.length
+        const r = Math.sqrt(1-z*z)
+        const target = depth === 1 ? 2.8 : 5
+        const x = r * Math.cos(angle), y = r * Math.sin(angle)
+        startAnim(mate, {
+          x: to.x + target * (b.rx*x + b.ux*y + b.fx*z),
+          y: to.y + target * (b.ry*x + b.uy*y + b.fy*z),
+          z: to.z + target * (b.rz*x + b.uz*y + b.fz*z)
+        }, depth === 1 ? 1050 : 1450)
       }
     } else {
       const a = scene.byId.get(req.src)
@@ -924,13 +1437,21 @@ function Scene({
     cam.dirty = true
   }, [focusReq, scene, camRef])
 
+  const stopMotion = useCallback(() => {
+    const cam = camRef.current
+    cam.anim = null
+    flightRef.current.velocity = 0
+    const ids = [...atomAnims.current].filter(([, anim]) => anim.changed).map(([id]) => id)
+    atomAnims.current.clear()
+    if (ids.length) handlersRef.current.onMoved(ids)
+  }, [camRef])
+
   const onPointerDown = useCallback(
     e => {
       const pan = e.button === 1
       if (e.button !== 0 && !pan) return
       e.preventDefault()
       const cam = camRef.current
-      cam.anim = null
       movedRef.current = 0
       const card = e.button === 0 && e.target && e.target.closest ? e.target.closest('.em-atom') : null
       if (card && card.dataset.id) {
@@ -978,7 +1499,7 @@ function Scene({
         }
       }
     },
-    [camRef]
+    [camRef, stopMotion]
   )
 
   const onPointerMove = useCallback(
@@ -989,9 +1510,23 @@ function Scene({
       const dy = e.clientY - drag.y
       movedRef.current = Math.max(movedRef.current, Math.hypot(dx, dy))
       const cam = camRef.current
+      if (!drag.interrupted && movedRef.current > 4) {
+        drag.interrupted = true
+        stopMotion()
+        if (drag.mode === 'atom') {
+          const atom = sceneRef.current.byId.get(drag.id)
+          if (atom) drag.base = { x: atom.x, y: atom.y, z: atom.z }
+        } else if (drag.mode === 'pan') {
+          drag.base = { x: cam.fx, y: cam.fy, z: cam.fz }
+          drag.b = cameraBasis(cam)
+          drag.scale = cam.dist / ((sizeRef.current.h || 1) / 2 / Math.tan(FOV / 2))
+        }
+      }
       if (drag.mode === 'atom') {
+        if (movedRef.current <= 4) return
         if (!drag.captured && movedRef.current > 4) {
           drag.captured = true
+          atomAnims.current.delete(drag.id)
           try {
             e.currentTarget.setPointerCapture(drag.pointerId)
           } catch {
@@ -1007,8 +1542,10 @@ function Scene({
           cam.dirty = true
         }
       } else if (drag.mode === 'pan') {
-        cam.panX = drag.panX + dx
-        cam.panY = drag.panY + dy
+        if (!drag.base) return
+        cam.fx = drag.base.x + (-drag.b.rx * dx + drag.b.ux * dy) * drag.scale
+        cam.fy = drag.base.y + (-drag.b.ry * dx + drag.b.uy * dy) * drag.scale
+        cam.fz = drag.base.z + (-drag.b.rz * dx + drag.b.uz * dy) * drag.scale
         cam.dirty = true
       } else {
         cam.yaw = drag.yaw - dx * 0.006
@@ -1016,7 +1553,7 @@ function Scene({
         cam.dirty = true
       }
     },
-    [camRef, posRef]
+    [camRef, posRef, stopMotion]
   )
 
   const onPointerUp = useCallback(e => {
@@ -1034,11 +1571,19 @@ function Scene({
     e => {
       e.preventDefault()
       const cam = camRef.current
-      cam.anim = null
-      cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.0011), cam.min, cam.max)
+      if (cam.anim || atomAnims.current.size) stopMotion()
+      const b = cameraBasis(cam)
+      let nearest = Infinity
+      for (const atom of sceneRef.current.atoms) {
+        const dx = atom.x-b.ex, dy = atom.y-b.ey, dz = atom.z-b.ez
+        nearest = Math.min(nearest, Math.hypot(dx,dy,dz))
+      }
+      const scale = clamp(Number.isFinite(nearest) ? nearest / 4 : 3, 0.35, 40)
+      const pixels = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (sizeRef.current.h || 800) : 1)
+      flightRef.current.velocity = clamp(flightRef.current.velocity - clamp(pixels, -1600, 1600) * 0.025 * scale, -480, 480)
       cam.dirty = true
     },
-    [camRef]
+    [camRef, stopMotion]
   )
 
   useEffect(() => {
@@ -1070,7 +1615,7 @@ function Scene({
             children: jsxs('div', {
               className: 'em-atom-body',
               children: [
-                jsx('span', { className: 'em-atom-num', children: `#${a.id}` }),
+                jsx('span', { className: 'em-atom-num', children: `${a.id}` }),
                 jsxs('div', {
                   className: 'em-atom-card',
                   children: [
@@ -1216,16 +1761,31 @@ function EndpointCard({ atom, onSelect, role }) {
   })
 }
 
+function GraphSelect({ value, options, onChange, className = '' }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const outside = e => { if (box.current && !box.current.contains(e.target)) setOpen(false) }
+    const escape = e => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', outside)
+    document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', escape) }
+  }, [open])
+  const selected = options.find(o => o.value === value)
+  return jsxs('div', { ref: box, className: `em-dd ${className}`, children: [
+    jsxs('button', { type: 'button', className: 'em-select em-dd-btn', 'aria-haspopup': 'listbox', 'aria-expanded': open,
+      onClick: () => setOpen(v => !v), children: [selected?.label || '—', '▾'] }),
+    open ? jsx('div', { className: 'em-dd-list', role: 'listbox', children: options.map(o => jsx('button', {
+      type: 'button', role: 'option', className: 'em-dd-item', 'aria-selected': o.value === value,
+      onClick: () => { setOpen(false); onChange(o.value) }, children: o.label
+    }, o.value)) }) : null
+  ] })
+}
+
 function RelationPicker({ value, onChange, allowEmpty }) {
-  return jsx('select', {
-    className: 'em-select em-rel-select',
-    value: value || '',
-    onChange: e => onChange(e.target.value),
-    children: [
-      allowEmpty ? jsx('option', { value: '', children: '— 选一个关系 —' }, '') : null,
-      ...RELS.map(rel => jsx('option', { value: rel, children: rel }, rel))
-    ]
-  })
+  return jsx(GraphSelect, { className: 'em-rel-select', value: value || '', onChange,
+    options: [...(allowEmpty ? [{ value: '', label: '— 选一个关系 —' }] : []), ...RELS.map(rel => ({ value: rel, label: rel }))] })
 }
 
 function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
@@ -1284,11 +1844,10 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
         className: 'em-field',
         children: [
           jsx('span', { className: 'em-label', children: '类型' }),
-          jsx('select', {
-            className: 'em-select',
+          jsx(GraphSelect, {
             value: kind,
-            onChange: e => setKind(e.target.value),
-            children: KINDS.map(k => jsx('option', { value: k, children: k }, k))
+            onChange: setKind,
+            options: KINDS.map(k => ({ value: k, label: k }))
           })
         ]
       }),
@@ -1324,6 +1883,7 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
         className: 'em-section',
         children: [
           jsx('div', { className: 'em-section-title', children: `连着的边（${mine.length}）` }),
+          jsx('div', { className: 'em-hint', children: '全部一跳真实关系保持可见；每层最多 16 个原子移动展开，完整边列表在下方。' }),
           mine.length === 0
             ? jsx('div', { className: 'em-hint', children: '没有边' })
             : jsx('div', {
@@ -1493,11 +2053,14 @@ function GraphPage({ ctx }) {
     refetchOnWindowFocus: false
   })
 
-  const [dim, setDim] = useState('all')
-  const [value, setValue] = useState('')
+  const [filters, setFilters] = useState({ project: '', session: '', date: '', kinds: [], rels: [], ids: '' })
   const [mode, setMode] = useState('only')
-  const [showRejected, setShowRejected] = useState(true)
   const [showLabels, setShowLabels] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [semQ, setSemQ] = useState('')
+  const [semTop, setSemTop] = useState(16)
+  const [sem, setSem] = useState(null)
+  const [semBusy, setSemBusy] = useState(false)
   const [pulled, setPulled] = useState(() => new Set())
   const [sel, setSel] = useState(null)
   const [focusReq, setFocusReq] = useState(null)
@@ -1508,6 +2071,7 @@ function GraphPage({ ctx }) {
   const seededRef = useRef(false)
   const pendingRef = useRef(new Set())
   const saveTimer = useRef(0)
+  const barRef = useRef(null)
   const camRef = useRef({
     yaw: 0.55,
     pitch: 0.26,
@@ -1533,85 +2097,208 @@ function GraphPage({ ctx }) {
     }
     return buildScene(data, posRef.current)
   }, [data, layoutEpoch])
+
+  // 关系筛选直接裁剪边表：被筛掉的边既不画、也进不了命中表。
   const scene = useMemo(() => {
     if (!rawScene) return null
-    if (showRejected) return rawScene
-    return { ...rawScene, edges: rawScene.edges.filter(e => e.kind !== 'none') }
-  }, [rawScene, showRejected])
+    if (!filters.rels.length) return rawScene
+    const keep = new Set(filters.rels)
+    return { ...rawScene, edges: rawScene.edges.filter(e => keep.has(edgeRelKey(e))) }
+  }, [rawScene, filters.rels])
 
-  const options = useMemo(() => {
-    if (!data) return []
-    if (dim === 'project') {
-      const counts = new Map()
-      for (const ev of data.events) {
-        const name = ev.project || '未归类'
-        counts.set(name, (counts.get(name) || 0) + 1)
-      }
-      return [...counts.entries()]
-        .sort((a, b) => a[0].localeCompare(b[0], 'zh'))
-        .map(([name, n]) => ({ value: name, label: `${name} · ${n} 条` }))
+  const totals = useMemo(() => {
+    if (!rawScene) return { atoms: 0, rel: 0, none: 0 }
+    let rel = 0
+    let none = 0
+    for (const e of rawScene.edges) {
+      if (e.kind === 'none') none += 1
+      else rel += 1
     }
-    if (dim === 'session') {
-      const byId = new Map()
-      for (const ev of data.events) {
-        if (!ev.session) continue
-        const row = byId.get(ev.session) || { id: ev.session, count: 0, last: 0 }
-        row.count += 1
-        row.last = Math.max(row.last, ev.ts)
-        byId.set(ev.session, row)
-      }
-      return [...byId.values()]
-        .sort((a, b) => b.last - a.last)
-        .map(s => ({ value: s.id, label: `${shortSession(s.id)} · ${s.count} 条` }))
-    }
-    if (dim === 'date') {
-      const counts = new Map()
-      for (const ev of data.events) {
-        const k = dayKey(ev.ts)
-        counts.set(k, (counts.get(k) || 0) + 1)
-      }
-      return [...counts.entries()]
-        .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-        .map(([k, n]) => ({ value: k, label: `${k} · ${n} 条` }))
-    }
-    return []
-  }, [data, dim])
+    return { atoms: rawScene.atoms.length, rel, none }
+  }, [rawScene])
 
-  useEffect(() => {
-    if (dim === 'all') {
-      setValue('')
-      return
+  const projectOptions = useMemo(() => {
+    const counts = new Map()
+    for (const ev of data?.events || []) {
+      const name = ev.project || '未归类'
+      counts.set(name, (counts.get(name) || 0) + 1)
     }
-    if (!options.some(o => o.value === value)) setValue(options[0]?.value ?? '')
-  }, [dim, options, value])
+    return [{ value: '', label: '项目：不限' }, ...[...counts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'zh'))
+      .map(([name, n]) => ({ value: name, label: `${name} · ${n} 条` }))]
+  }, [data])
 
+  const sessionOptions = useMemo(() => {
+    const byId = new Map()
+    for (const ev of data?.events || []) {
+      if (!ev.session) continue
+      const row = byId.get(ev.session) || { id: ev.session, count: 0, last: 0 }
+      row.count += 1
+      row.last = Math.max(row.last, ev.ts)
+      byId.set(ev.session, row)
+    }
+    return [{ value: '', label: '会话：不限' }, ...[...byId.values()]
+      .sort((a, b) => b.last - a.last)
+      .map(s => ({ value: s.id, label: `${shortSession(s.id)} · ${s.count} 条` }))]
+  }, [data])
+
+  const dateOptions = useMemo(() => {
+    const counts = new Map()
+    for (const ev of data?.events || []) {
+      const k = dayKey(ev.ts)
+      counts.set(k, (counts.get(k) || 0) + 1)
+    }
+    return [{ value: '', label: '日期：不限' }, ...[...counts.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([k, n]) => ({ value: k, label: `${k} · ${n} 条` }))]
+  }, [data])
+
+  const idSpec = useMemo(() => parseIdSpec(filters.ids), [filters.ids])
+
+  const idUnknown = useMemo(() => {
+    if (!data || !idSpec.ids.size) return 0
+    const known = new Set(data.events.map(ev => ev.id))
+    let missing = 0
+    for (const id of idSpec.ids) if (!known.has(id)) missing += 1
+    return missing
+  }, [data, idSpec])
+
+  const semActive = Boolean(sem && sem.q && !sem.error)
+  const activeCount = [
+    filters.project,
+    filters.session,
+    filters.date,
+    filters.kinds.length ? 1 : 0,
+    filters.rels.length ? 1 : 0,
+    idSpec.ids.size ? 1 : 0,
+    semActive ? 1 : 0
+  ].filter(Boolean).length
+
+  const filterInfo = useMemo(() => {
+    if (!scene) {
+      return { active: false, match: new Set(), focus: new Set(), promo: new Set(),
+        count: 0, edgeCount: 0, atomActive: false, relActive: false }
+    }
+    return computeFilterInfo({
+      events: data?.events || [],
+      edges: scene.edges,
+      filters,
+      idSet: idSpec.ids,
+      semIds: semActive ? new Set(sem.hits.map(h => h.id)) : null,
+      semActive,
+      mode,
+      pulled
+    })
+  }, [data, scene, filters, idSpec, sem, semActive, mode, pulled])
+
+  const filterKey = JSON.stringify([
+    filters.project, filters.session, filters.date, filters.kinds, filters.rels, filters.ids,
+    sem?.q || '', sem?.error || '', (sem?.hits || []).map(h => h.id), mode
+  ])
   useEffect(() => {
     setPulled(new Set())
-  }, [dim, value, mode])
+  }, [filterKey])
 
-  const focusInfo = useMemo(() => {
-    const events = data?.events || []
-    const edges = scene?.edges || []
-    const active = dim !== 'all' && Boolean(value)
-    if (!active) return { active: false, match: new Set(), focus: new Set(), promo: new Set(), count: 0 }
-    const match = new Set()
-    for (const ev of events) {
-      const key = dim === 'project' ? ev.project || '未归类' : dim === 'session' ? ev.session : dayKey(ev.ts)
-      if (key === value) match.add(ev.id)
+  // 筛完之后命中的原子可能全在镜头外（默认镜头贴着最新原子），空白舞台等于「筛坏了」。
+  // 命中集变化时把镜头收拢到它的包围球；正在看检查器时不抢镜头。
+  const fittedRef = useRef('')
+  useEffect(() => {
+    if (!filterInfo.active) {
+      fittedRef.current = ''
+      return undefined
     }
-    const focus = new Set(match)
-    if (mode === 'neighbors') {
-      for (const e of edges) {
-        if (match.has(e.src) || match.has(e.dst)) {
-          focus.add(e.src)
-          focus.add(e.dst)
-        }
+    if (!scene || sel || !filterInfo.focus.size) return undefined
+    if (fittedRef.current === filterKey) return undefined
+    const timer = setTimeout(() => {
+      fittedRef.current = filterKey
+      const atoms = []
+      let n = 0
+      let cx = 0
+      let cy = 0
+      let cz = 0
+      for (const id of filterInfo.focus) {
+        const a = scene.byId.get(id)
+        if (!a) continue
+        atoms.push(a)
+        cx += a.x
+        cy += a.y
+        cz += a.z
+        n += 1
       }
+      if (!n) return
+      cx /= n
+      cy /= n
+      cz /= n
+      let radius = 1.5
+      for (const a of atoms) radius = Math.max(radius, Math.hypot(a.x - cx, a.y - cy, a.z - cz))
+      const cam = camRef.current
+      // cam.fit 里已经带着当前视口的宽高比，反推同一个 sin(半角) 再按命中球半径算距离。
+      const sinHalf = Math.min(0.95, Math.max(0.06, ((scene.radius || 1) * 1.12) / Math.max(1e-6, cam.fit)))
+      const dist = Math.max(cam.min, Math.min(cam.max, (radius * 1.12) / sinHalf))
+      // cam.fx/fy/fz 是注视点，不是眼睛：eye = 注视点 + dist * 方向（cameraBasis）。
+      animateCamera(cam, { dist, fx: cx, fy: cy, fz: cz, panX: 0, panY: 0 }, 620)
+    }, 260)
+    return () => clearTimeout(timer)
+  }, [filterInfo, filterKey, scene, sel, camRef])
+
+  useEffect(() => {
+    if (!panelOpen) return undefined
+    const outside = e => {
+      if (barRef.current && !barRef.current.contains(e.target)) setPanelOpen(false)
     }
-    for (const id of pulled) focus.add(id)
-    const promo = new Set([...focus].filter(id => !match.has(id)))
-    return { active, match, focus, promo, count: match.size }
-  }, [data, scene, dim, value, mode, pulled])
+    const escape = e => {
+      if (e.key === 'Escape') setPanelOpen(false)
+    }
+    document.addEventListener('mousedown', outside)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', outside)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [panelOpen])
+
+  const patch = useCallback(update => {
+    setFilters(prev => ({ ...prev, ...update }))
+    setSel(null)
+  }, [])
+
+  const clearAll = useCallback(() => {
+    setFilters({ project: '', session: '', date: '', kinds: [], rels: [], ids: '' })
+    setSem(null)
+    setSemQ('')
+    setMode('only')
+    setPulled(new Set())
+    setSel(null)
+  }, [])
+
+  const clearSemantic = useCallback(() => {
+    setSem(null)
+    setSemQ('')
+  }, [])
+
+  const runSemantic = useCallback(async () => {
+    const q = semQ.trim()
+    if (!q) {
+      setSem(null)
+      return
+    }
+    setSemBusy(true)
+    setPanelOpen(true)
+    try {
+      const res = await ctx.rest('/semantic', { method: 'POST', body: { q, top: semTop } })
+      const hits = Array.isArray(res?.hits)
+        ? res.hits
+            .map(h => ({ id: Number(h.id), score: Number(h.score) }))
+            .filter(h => Number.isFinite(h.id) && Number.isFinite(h.score))
+        : []
+      setSem({ q, hits, scanned: Number.isFinite(Number(res?.scanned)) ? Number(res.scanned) : null,
+        skipped: Number(res?.skipped ?? 0), error: '' })
+    } catch (e) {
+      setSem({ q, hits: [], scanned: null, skipped: 0, error: String(e?.message || e) })
+    } finally {
+      setSemBusy(false)
+    }
+  }, [ctx, semQ, semTop])
 
   const sceneRef = useRef(scene)
   sceneRef.current = scene
@@ -1640,7 +2327,7 @@ function GraphPage({ ctx }) {
         return
       }
       // 筛选时把这根边的两头都算进焦点：拉过之后它们才点得动。
-      if (focusInfo.active) {
+      if (filterInfo.active) {
         setPulled(prev => {
           const next = new Set(prev)
           next.add(edge.src)
@@ -1653,19 +2340,28 @@ function GraphPage({ ctx }) {
       seqRef.current += 1
       setFocusReq({ seq: seqRef.current, mode: 'edge', src: edge.src, dst: edge.dst })
     },
-    [sel, focusInfo]
+    [sel, filterInfo]
   )
+
+  const onIdEnter = useCallback(() => {
+    const { ids } = parseIdSpec(filters.ids)
+    if (ids.size !== 1) return
+    const [id] = [...ids]
+    if (!sceneRef.current || !sceneRef.current.byId.has(id)) return
+    selectAtom(id, true)
+  }, [filters.ids, selectAtom])
 
   const resetView = useCallback(() => {
     const cam = camRef.current
     const seed = rawScene?.newestId != null ? rawScene.byId.get(rawScene.newestId) : null
+    const direction = cameraBasis({ ...cam, yaw: 0.55, pitch: 0.26 })
     animateCamera(cam, {
       yaw: 0.55,
       pitch: 0.26,
       dist: START_DIST,
-      fx: seed ? seed.x : 0,
-      fy: seed ? seed.y : 0,
-      fz: seed ? seed.z : 0,
+      fx: (seed ? seed.x : 0) + direction.fx * START_DIST,
+      fy: (seed ? seed.y : 0) + direction.fy * START_DIST,
+      fz: (seed ? seed.z : 0) + direction.fz * START_DIST,
       panX: 0,
       panY: 0
     })
@@ -1743,18 +2439,14 @@ function GraphPage({ ctx }) {
     })
   }
 
-  const counts = {
-    atoms: scene.atoms.length,
-    edges: scene.edges.filter(e => e.kind === 'rel').length,
-    rejected: scene.edges.filter(e => e.kind === 'none').length
-  }
+  const vectorCount = Number(data.vectors?.events || 0)
 
   return jsxs('div', {
     className: 'em-root',
     children: [
       jsx(Scene, {
         scene,
-        focusInfo,
+        focusInfo: filterInfo,
         sel,
         focusReq,
         showLabels,
@@ -1768,44 +2460,54 @@ function GraphPage({ ctx }) {
 
       jsxs('div', {
         className: 'em-bar',
+        ref: barRef,
         children: [
           jsx('span', { className: 'em-brand', children: '记忆图谱' }),
-          jsxs('div', {
-            className: 'em-seg',
+          jsxs('button', {
+            type: 'button',
+            className: 'em-fbtn',
+            'data-on': panelOpen ? '1' : '0',
+            onClick: () => setPanelOpen(v => !v),
+            title: '筛选：项目 / 会话 / 日期 / 类型 / 序号 / 关系 / 语义',
             children: [
-              ['all', '全部'],
-              ['project', '项目'],
-              ['session', '会话'],
-              ['date', '日期']
-            ].map(([k, label]) =>
-              jsx(
-                'button',
-                {
-                  type: 'button',
-                  className: 'em-seg-btn',
-                  'data-on': dim === k ? '1' : '0',
-                  onClick: () => {
-                    setDim(k)
-                    setSel(null)
-                  },
-                  children: label
-                },
-                k
-              )
-            )
+              '筛选',
+              activeCount ? jsx('span', { className: 'em-fbadge', children: activeCount }) : null
+            ]
           }),
-          dim !== 'all'
-            ? jsx('select', {
-                className: 'em-select em-value',
-                value,
-                onChange: e => {
-                  setValue(e.target.value)
-                  setSel(null)
-                },
-                children: options.map(o => jsx('option', { value: o.value, children: o.label }, o.value))
-              })
-            : null,
-          dim !== 'all'
+          jsxs('div', {
+            className: 'em-sem',
+            children: [
+              jsx('input', {
+                className: 'em-input em-seminput',
+                value: semQ,
+                placeholder: vectorCount ? '语义检索：描述你要找的记忆…' : '语义检索：库里还没有事件向量',
+                'aria-label': '语义检索',
+                onChange: e => setSemQ(e.target.value),
+                onKeyDown: e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    runSemantic()
+                  }
+                }
+              }),
+              jsx(Button, {
+                size: 'xs',
+                variant: 'ghost',
+                disabled: semBusy || !vectorCount,
+                onClick: runSemantic,
+                children: semBusy ? '检索中…' : '检索'
+              }),
+              sem ? jsxs('span', {
+                className: 'em-semtag',
+                title: sem.error ? sem.error : `${sem.q} · Top ${semTop}`,
+                children: [
+                  sem.error ? '语义不可用' : `语义 ${sem.hits.length}`,
+                  jsx('button', { type: 'button', className: 'em-x-inline', title: '清除语义筛选', onClick: clearSemantic, children: '✕' })
+                ]
+              }) : null
+            ]
+          }),
+          filterInfo.active
             ? jsxs('div', {
                 className: 'em-seg',
                 title: '焦点范围',
@@ -1832,17 +2534,6 @@ function GraphPage({ ctx }) {
             children: [
               jsx('input', {
                 type: 'checkbox',
-                checked: showRejected,
-                onChange: e => setShowRejected(e.target.checked)
-              }),
-              '灰边（判定为无）'
-            ]
-          }),
-          jsx('label', {
-            className: 'em-check',
-            children: [
-              jsx('input', {
-                type: 'checkbox',
                 checked: showLabels,
                 onChange: e => setShowLabels(e.target.checked)
               }),
@@ -1852,15 +2543,37 @@ function GraphPage({ ctx }) {
           jsxs('span', {
             className: 'em-counts',
             children: [
-              `${counts.atoms} 原子 · ${counts.edges} 边`,
-              counts.rejected ? ` · ${counts.rejected} 灰边` : '',
-              focusInfo.active ? ` · 命中 ${focusInfo.count}` : ''
+              `${totals.atoms} 原子 · ${totals.rel} 边`,
+              totals.none ? ` · ${totals.none} 灰边` : '',
+              filterInfo.active ? ` · 命中 ${filterInfo.count} 原子 / ${filterInfo.edgeCount} 边` : ''
             ]
           }),
           jsx('span', { className: 'em-spacer' }),
           jsx(Button, { size: 'xs', variant: 'ghost', onClick: resetView, children: '重置视角' }),
           jsx(Button, { size: 'xs', variant: 'ghost', onClick: resetLayout, children: '复原布局' }),
-          jsx(Button, { size: 'xs', variant: 'ghost', onClick: () => refetch(), children: '刷新' })
+          jsx(Button, { size: 'xs', variant: 'ghost', onClick: () => refetch(), children: '刷新' }),
+          panelOpen
+            ? jsx(FilterPanel, {
+                filters,
+                patch,
+                projectOptions,
+                sessionOptions,
+                dateOptions,
+                idSpec,
+                idUnknown,
+                onIdEnter,
+                sem,
+                semTop,
+                setSemTop,
+                onSelectHit: id => {
+                  if (scene.byId.has(id)) selectAtom(id, true)
+                },
+                onClearSemantic: clearSemantic,
+                vectorCount,
+                activeCount,
+                onClearAll: clearAll
+              })
+            : null
         ]
       }),
 

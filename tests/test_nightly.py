@@ -596,6 +596,20 @@ def test_margin_boundary():
         check("margin: %s -> %d edges" % (label, expected), res["edges"] == expected, repr(res))
 
 
+def test_margin_float_boundary_and_ties():
+    labels = nightly_mod._AXIS_RELS
+    def answer(change, negate, none=0.0):
+        return {"probabilities": {"重复": 0.0, "改变": change, "否定": negate}, "none": none}
+    exact = nightly_mod._accepted(answer(0.6, 0.45), labels, 0.15)
+    check("margin: floating equal boundary passes", exact is not None, repr(exact))
+    check("margin: meaningfully below boundary fails",
+          nightly_mod._accepted(answer(0.449999, 0.30), labels, 0.15) is None)
+    check("margin: real tie rejected at zero margin",
+          nightly_mod._accepted(answer(0.5, 0.5), labels, 0.0) is None)
+    check("margin: none tie rejected at zero margin",
+          nightly_mod._accepted(answer(0.5, 0.0, 0.5), labels, 0.0) is None)
+
+
 def test_margin_none_wins():
     store = FakeStore(
         [make_event(1, T, "旧", 1), make_event(2, T + 60, "新", 1)],
@@ -710,7 +724,7 @@ def test_decide_none_is_tolerated():
         vecs={1: unit(0), 2: unit(0)},
     )
     res = build_edges(store, NoneJev(), T - 1)
-    check("none: one failed pair", res["pairs"] == 1 and res["skipped"] is None, repr(res))
+    check("none: one failed pair prevents cursor advancement", res["pairs"] == 1 and res["skipped"] == "jev-error", repr(res))
     check("none: no edge", store.edges == [], repr(store.edges))
 
 
@@ -725,6 +739,144 @@ def test_jev_errors_abort_after_three():
     check("abort: three failures then stop", res["pairs"] == 3, repr(res))
     check("abort: skipped jev-error", res["skipped"] == "jev-error", repr(res))
     check("abort: no edges", store.edges == [], repr(store.edges))
+
+
+def test_real_store_rerun_preserves_archive_and_deleted_edge():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        new = store.add_event("变更", "new", ts=T + 60, session="s")
+        first = FakeJev({"change": 0.9, "because": 0.8})
+        build_edges(store, first, T - 1)
+        archive = tuple(store._db.execute("SELECT * FROM pair_evals").fetchone())
+        store.delete_edge(new, old, "改变")
+        second = FakeJev({"dup": 0.9, "refine": 0.9})
+        ticks = []
+        result = build_edges(store, second, T - 1, on_progress=ticks.append)
+        check("rerun: no new request", not second.calls and result["pairs"] == 0, repr(result))
+        check("rerun: no progress for skipped pair", not ticks, repr(ticks))
+        check("rerun: archive unchanged", tuple(store._db.execute("SELECT * FROM pair_evals").fetchone()) == archive)
+        check("rerun: no resurrection or contradiction", [r[0] for r in store._db.execute("SELECT rel FROM edges")] == ["因为"])
+    finally:
+        store.close()
+
+
+def test_manual_edge_and_malformed_archive_are_protected():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        new = store.add_event("变更", "new", ts=T + 60, session="s")
+        store.set_edge(new, old, "改变")
+        before = tuple(store._db.execute("SELECT * FROM edges").fetchone())
+        jev = FakeJev({"dup": 0.9})
+        build_edges(store, jev, T - 1)
+        check("manual edge: no evaluation", not jev.calls, repr(jev.calls))
+        check("manual edge: unchanged", tuple(store._db.execute("SELECT * FROM edges").fetchone()) == before)
+        check("manual edge: no new edge", store._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 1)
+        store.add_pair_eval(new, old, axis_probs=None, detail_probs=None)
+        jev2 = FakeJev({"dup": 0.9})
+        build_edges(store, jev2, T - 1)
+        check("incomplete with existing edge: preserved", not jev2.calls)
+    finally:
+        store.close()
+
+
+def test_partial_model_answer_is_retried_without_partial_writes():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        new = store.add_event("变更", "new", ts=T + 60, session="s")
+        class Partial(FakeJev):
+            def decide_choice(self, state, questions):
+                answers = super().decide_choice(state, questions)
+                return [answers[0], None]
+        build_edges(store, Partial({"change": 0.9}), T - 1)
+        check("partial: no archived result", store._db.execute("SELECT COUNT(*) FROM pair_evals").fetchone()[0] == 0)
+        check("partial: no edge", store._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0)
+        retry = FakeJev({"change": 0.9})
+        build_edges(store, retry, T - 1)
+        check("partial: next pass retries", len(retry.calls) == 1, repr(retry.calls))
+        check("partial: retry produces edge", store._db.execute("SELECT rel FROM edges").fetchone()[0] == "改变")
+    finally:
+        store.close()
+
+
+def test_concurrent_archive_winner_is_not_overwritten():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        new = store.add_event("变更", "new", ts=T + 60, session="s")
+        class Racing(FakeJev):
+            def decide_choice(self, state, questions):
+                answers = super().decide_choice(state, questions)
+                store.add_pair_eval(new, old, axis_probs={"other": 1}, detail_probs={"other": 1})
+                store.set_edge(new, old, "改变")
+                return answers
+        build_edges(store, Racing({"dup": 0.9}), T - 1)
+        row = store._db.execute("SELECT axis_probs FROM pair_evals").fetchone()[0]
+        check("race: winner archive preserved", "other" in row, row)
+        check("race: no conflicting edge", [r[0] for r in store._db.execute("SELECT rel FROM edges")] == ["改变"])
+    finally:
+        store.close()
+
+
+def test_concurrent_event_removal_does_not_create_pair():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        new = store.add_event("变更", "new", ts=T + 60, session="s")
+        class Forgetting(FakeJev):
+            def decide_choice(self, state, questions):
+                result = super().decide_choice(state, questions)
+                store._db.execute("DELETE FROM events WHERE id=?", (old,))
+                store._db.commit()
+                return result
+        result = build_edges(store, Forgetting({"change": 0.9}), T - 1)
+        check("forgotten: no pair archive", store._db.execute("SELECT COUNT(*) FROM pair_evals").fetchone()[0] == 0)
+        check("forgotten: no dangling edge", store._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0)
+        check("forgotten: cursor not advanced", result["skipped"] == "jev-error", repr(result))
+    finally:
+        store.close()
+
+
+def test_concurrent_event_edit_does_not_commit_stale_decision():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        old = store.add_event("变更", "old", ts=T, session="s")
+        store.add_event("变更", "new", ts=T + 60, session="s")
+        class Editing(FakeJev):
+            def decide_choice(self, state, questions):
+                answers = super().decide_choice(state, questions)
+                store.update_event(old, text="changed after request")
+                return answers
+        result = build_edges(store, Editing({"change": 0.9}), T - 1)
+        check("edited: no stale archive", store._db.execute("SELECT COUNT(*) FROM pair_evals").fetchone()[0] == 0)
+        check("edited: no stale edge", store._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0)
+        check("edited: retryable", result["skipped"] == "jev-error", repr(result))
+    finally:
+        store.close()
+
+
+def test_sqlite_write_failure_rolls_back_pair_and_edges():
+    from eventmem_core.store import Store
+    store = Store(":memory:")
+    try:
+        store.add_event("变更", "old", ts=T, session="s")
+        store.add_event("变更", "new", ts=T + 60, session="s")
+        store._db.execute("CREATE TRIGGER fail_edge BEFORE INSERT ON edges BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+        store._db.commit()
+        result = build_edges(store, FakeJev({"change": 0.9}), T - 1)
+        check("write failure: no partial archive", store._db.execute("SELECT COUNT(*) FROM pair_evals").fetchone()[0] == 0)
+        check("write failure: no partial edges", store._db.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0)
+        check("write failure: cursor retained", result["skipped"] == "jev-error", repr(result))
+    finally:
+        store.close()
 
 
 def test_rerun_is_idempotent():
@@ -797,7 +949,7 @@ def test_jev_payload_and_parsing():
     choice._post = lambda p: captured2.update(p) or {
         "answers": {
             "axis": {"choice": "改变", "confidence": 0.77,
-                     "probabilities": {"重复": 0.01, "改变": 0.77, "否定": 0.21},
+                     "probabilities": {"重复": 0.01, "改变": 0.78, "否定": 0.21},
                      "none_probability": 0.017},
             "detail": {"choice": None, "confidence": 0.03,
                        "probabilities": {"因为": 0.03, "细化": 0.02},
@@ -971,6 +1123,7 @@ TESTS = [
     ("q2 unclosed lessons", test_q2_unclosed_lessons_only),
     ("q2 decision skeleton", test_q2_decision_skeleton),
     ("margin boundary", test_margin_boundary),
+    ("margin float boundary and ties", test_margin_float_boundary_and_ties),
     ("margin none wins", test_margin_none_wins),
     ("pair archive", test_every_asked_pair_is_archived),
     ("repeat suppresses detail", test_repeat_suppresses_detail),
@@ -981,6 +1134,13 @@ TESTS = [
     ("no new events", test_no_new_events),
     ("decide None", test_decide_none_is_tolerated),
     ("jev errors abort", test_jev_errors_abort_after_three),
+    ("real store rerun preservation", test_real_store_rerun_preserves_archive_and_deleted_edge),
+    ("manual edge protection", test_manual_edge_and_malformed_archive_are_protected),
+    ("partial answer retry", test_partial_model_answer_is_retried_without_partial_writes),
+    ("concurrent archive winner", test_concurrent_archive_winner_is_not_overwritten),
+    ("concurrent event removal", test_concurrent_event_removal_does_not_create_pair),
+    ("concurrent event edit", test_concurrent_event_edit_does_not_commit_stale_decision),
+    ("atomic sqlite failure", test_sqlite_write_failure_rolls_back_pair_and_edges),
     ("rerun idempotent", test_rerun_is_idempotent),
     ("jev default noop", test_jev_default_is_noop),
     ("jev payload/parsing", test_jev_payload_and_parsing),

@@ -84,13 +84,17 @@ const CSS = `
   background:var(--ui-bg-card)}
 .emg-card + .emg-card{margin-top:12px}
 .emg-card h3{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ui-text-secondary);letter-spacing:.02em}
-/* The card+card rule gives stacked cards a top margin; inside a grid that margin
-   shrinks the second card by the same amount and leaves the two bottoms uneven. */
+/* One rhythm for the page: every top-level block of a tab is 12px below the one before it.
+   The old rule only spaced card-after-card, so a grid followed by a card (概览, 模型) had a
+   0px gap and the two rounded borders fused into one line. */
+.emg-page > * + *{margin-top:12px}
+/* Same margin, from inside a grid: the second card would shrink by it and sit lower, so
+   the two bottoms never line up. */
 .emg-grid{display:grid;gap:12px;align-items:stretch}
 .emg-grid > .emg-card{margin-top:0}
 .emg-grid.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .emg-grid.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
-.emg-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.emg-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .emg-tile{border:1px solid var(--ui-stroke-secondary);border-radius:9px;padding:11px 14px;background:var(--ui-bg-card)}
 .emg-tile .k{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ui-text-tertiary)}
 .emg-tile .v{font-size:23px;line-height:1.3;font-variant-numeric:tabular-nums}
@@ -399,9 +403,24 @@ function Note({ text, kind }) {
 
 /* ------------------------------------------------------------------ 概览 */
 
+/* The strip above the page ticks once per answered pair. While that is happening the tiles
+   have to move at the same tempo, so the poll idles at 5 s and tightens to 1.5 s for as
+   long as /api/status reports a live pass — and does one last fetch once it ends, so the
+   final counts land without waiting out the idle interval. */
+const OVERVIEW_PATHS = ['/api/stats', '/api/status', '/api/config']
+const OVERVIEW_EVERY = 5000
+const OVERVIEW_EVERY_LIVE = 1500
+
 function Overview({ ctx }) {
-  const { data, error, reload } = useFetchAll(ctx, ['/api/stats', '/api/status', '/api/config'], 5000)
+  const [every, setEvery] = useState(OVERVIEW_EVERY)
+  const { data, error, reload } = useFetchAll(ctx, OVERVIEW_PATHS, every)
   const [stats, status, config] = data || [{}, {}, {}]
+  const running = Boolean(status && status.live)
+
+  useEffect(() => {
+    setEvery(running ? OVERVIEW_EVERY_LIVE : OVERVIEW_EVERY)
+  }, [running])
+
   const cursor = (status && status.cursor) || {}
   const kinds = (stats && stats.kinds) || {}
   const kindRows = Object.entries(kinds)
@@ -410,7 +429,7 @@ function Overview({ ctx }) {
   const runs = ((status && status.runs) || []).slice().reverse()
   const chain = (config && config.effective && config.effective.decision && config.effective.decision.backends) || []
 
-  return jsxs('div', {
+  return jsxs('div', { className: 'emg-page',
     children: [
       jsxs('div', {
         className: 'emg-tiles',
@@ -724,7 +743,7 @@ function Backends({ ctx, notify }) {
 
   const problems = (packs.data && packs.data.problems) || []
 
-  return jsxs('div', {
+  return jsxs('div', { className: 'emg-page',
     children: [
       jsx(Card, {
         title: t('链路顺序'),
@@ -896,7 +915,7 @@ function Models({ ctx, notify }) {
       ? 100
       : 0
 
-  return jsxs('div', {
+  return jsxs('div', { className: 'emg-page',
     children: [
       jsxs('div', {
         className: 'emg-grid c2',
@@ -1034,8 +1053,8 @@ const PRESETS = {
 const FIELDS = [
   ['heads_vec_top_k', t('Tier1 · 向量近邻 top-k'), 1],
   ['heads_cos_min', t('Tier1 · 余弦下限'), 0.05],
-  ['margin', t('Tier1 · 写边 margin'), 0.01],
   ['session_heads_top_k', t('Tier2 · 同会话最近 top-k'), 1],
+  ['session_recent', t('Tier2 · 同会话近期事件数'), 1],
   ['unclosed_lessons', t('Tier2 · 未闭环教训'), 1],
   ['decision_skeleton', t('Tier2 · 决策骨架'), 1],
   ['cross_top_k', t('Tier3 · 跨项目 top-k'), 1],
@@ -1043,11 +1062,22 @@ const FIELDS = [
   ['poll_seconds', t('轮询间隔（秒）'), 1]
 ]
 
+const ACCEPT_FIELDS = [
+  ['margin', '全局 margin'],
+  ['min_conf_change', '改变最低置信度'],
+  ['min_conf_negate', '否定最低置信度'],
+  ['min_conf_repeat', '重复最低置信度'],
+  ['min_conf_because', '因为最低置信度'],
+  ['min_conf_refine', '细化最低置信度']
+]
+
 const DEFAULTS = {
   heads_vec_top_k: 10,
   heads_cos_min: 0.35,
   margin: 0.15,
+  min_conf_change: 0, min_conf_negate: 0, min_conf_repeat: 0, min_conf_because: 0, min_conf_refine: 0,
   session_heads_top_k: 10,
+  session_recent: 3,
   unclosed_lessons: 2,
   decision_skeleton: 5,
   cross_top_k: 3,
@@ -1055,11 +1085,56 @@ const DEFAULTS = {
   poll_seconds: 60
 }
 
+
+const fillText = (translate, text, ...args) => translate(text).replace(/\{(\d+)\}/g, (m, i) => args[+i] ?? m);
+function recalText(r, tr) {
+  const f = (text, ...args) => fillText(tr, text, ...args);
+  return ['改变', '否定', '重复', '因为', '细化'].map((rel) => f('{0}：新增 {1}，删除 {2}', tr(rel), r.added?.[rel] ?? '—', r.removed?.[rel] ?? '—')).concat([
+    f('置信度更新的边：{0}', r.confidence_updates ?? '—'), f('跳过的事件对：{0}', r.skipped ?? '—'), f('未覆盖的 Jev 边：{0}', r.uncovered_jev_edges ?? r.uncovered_edges ?? '—'), f('记录了人工删除的事件对：{0}', r.manual_deletion_pairs ?? '—'), ...(r.legacy_deletions_unknown ? [tr('旧版人工删除记录无法确认。')] : [])]).join('\n');
+}
+function backfillText(r, tr) {
+  return fillText(tr, '历史事件 {0} 条；当前图观察到 {1} 个候选对。该观察值不是最终数量，也不是上限或下限；新边可能改变后续候选。', r.event_count ?? '—', r.observed_pairs ?? '—');
+}
+function progressText(p, tr) {
+  const states = {idle:'尚无补算任务', pending:'等待中', running:'运行中', done:'已结束', error:'失败', completed:'已完成', stopped:'已停止', 'jev-unavailable':'模型不可用', 'jev-error':'模型判定失败'};
+  const state = p?.result?.status || p?.state || 'idle';
+  return fillText(tr, '补算状态：{0}；已判 {1} 对，新增 {2} 条边', tr(states[state] || state), p?.pairs ?? 0, p?.edges ?? 0) + (p?.error ? '\n' + p.error : '');
+}
+
 function Schedule({ ctx, notify }) {
   const config = useFetch(ctx, '/api/config')
   const [form, setForm] = useState({ ...DEFAULTS })
   const [busy, setBusy] = useState(false)
+  const [previews, setPreviews] = useState({})
+  const [conditional, setConditional] = useState(false)
+  const conditionalRef = useRef(false)
+  const [backfillProgress, setBackfillProgress] = useState(null)
+  const formRef = useRef(form)
+  formRef.current = form
   const seeded = useRef(false)
+
+  useEffect(() => {
+    let active = true, timer
+    const poll = async () => {
+      try {
+        const data = await ctx.rest('/api/status')
+        if (!active) return
+        setBackfillProgress(data.backfill || { state: 'idle' })
+      } catch (error) { if (active) notify(msg(error), 'err') }
+    }
+    poll()
+    return () => { active = false; clearTimeout(timer) }
+  }, [ctx])
+
+  useEffect(() => {
+    if (!['running', 'pending'].includes(backfillProgress?.state)) return
+    let active = true
+    const timer = setTimeout(async () => {
+      try { const data = await ctx.rest('/api/status'); if (active) setBackfillProgress(data.backfill || { state: 'idle' }) }
+      catch (error) { if (active) notify(msg(error), 'err') }
+    }, 5000)
+    return () => { active = false; clearTimeout(timer) }
+  }, [ctx, backfillProgress])
 
   useEffect(() => {
     if (!config.data || seeded.current) return
@@ -1070,19 +1145,81 @@ function Schedule({ ctx, notify }) {
     seeded.current = true
   }, [config.data])
 
-  const pairs = ['heads_vec_top_k', 'session_heads_top_k', 'unclosed_lessons', 'decision_skeleton', 'cross_top_k']
-    .map((key) => Number(form[key]) || 0)
-    .reduce((a, b) => a + b, 0)
-
-  const edit = (key, value) => setForm((old) => ({ ...old, [key]: value }))
+  const preset = (values) => { setForm((old) => ({ ...old, ...values })); setPreviews({}) }
+  const edit = (key, value) => { setForm((old) => ({ ...old, [key]: value })); setPreviews({}) }
+  const edgeValues = (source = form) => {
+    const edges = {}
+    for (const key of Object.keys(DEFAULTS)) {
+      const value = Number(source[key])
+      if (String(source[key]).trim() === '' || !Number.isFinite(value) || value < 0 ||
+          (ACCEPT_FIELDS.some(([name]) => name === key) && value > 1)) throw new Error(t('请输入有效数值（置信度与 margin 为 0–1）'))
+      edges[key] = value
+    }
+    return edges
+  }
+  const candidateEdges = (edges) => Object.fromEntries(Object.entries(edges).filter(([key]) => !ACCEPT_FIELDS.some(([name]) => name === key) && key !== 'poll_seconds'))
+  const acceptanceEdges = (edges) => Object.fromEntries(ACCEPT_FIELDS.map(([key]) => [key, edges[key]]))
+  const preview = async (kind) => {
+    setBusy(true)
+    setPreviews((old) => ({ ...old, [kind]: null }))
+    try {
+      const values = edgeValues()
+      const edges = kind === 'recalibrate' ? acceptanceEdges(values) : candidateEdges(values)
+      const historical_scale = kind === 'recalibrate' && conditionalRef.current ? 'conditional' : null
+      const path = kind === 'recalibrate' ? '/api/recalibrate/preview' : '/api/backfill/preview'
+      const result = await ctx.rest(path, { method: 'POST', body: kind === 'recalibrate' ? { edges, historical_scale } : { edges } })
+      if (!result || !result.token) throw new Error(t('预览未返回令牌，无法应用'))
+      const current = edgeValues(formRef.current)
+      if (JSON.stringify(edges) !== JSON.stringify(kind === 'recalibrate' ? acceptanceEdges(current) : candidateEdges(current))) throw new Error(t('参数已改变，请重新预览'))
+      if (kind === 'recalibrate' && historical_scale !== (conditionalRef.current ? 'conditional' : null)) throw new Error(t('参数已改变，请重新预览'))
+      setPreviews((old) => ({ ...old, [kind]: { result, edges, historical_scale } }))
+    } catch (error) { notify(msg(error), 'err') } finally { setBusy(false) }
+  }
+  const apply = async (kind) => {
+    const p = previews[kind]
+    if (!p || !confirm(t('确认应用历史操作？此操作不会保存未来设置。'))) return
+    setBusy(true)
+    try {
+      const values = edgeValues()
+      if (JSON.stringify(p.edges) !== JSON.stringify(kind === 'recalibrate' ? acceptanceEdges(values) : candidateEdges(values))) throw new Error(t('参数已改变，请重新预览'))
+      if (kind === 'recalibrate' && p.historical_scale !== (conditionalRef.current ? 'conditional' : null)) throw new Error(t('参数已改变，请重新预览'))
+      const path = kind === 'recalibrate' ? '/api/recalibrate/apply' : '/api/backfill/start'
+      const result = await ctx.rest(path, { method: 'POST', body: kind === 'recalibrate' ? { edges: p.edges, token: p.result.token, historical_scale: p.historical_scale } : { edges: p.edges, token: p.result.token } })
+      setPreviews((old) => ({ ...old, [kind]: null }))
+      if (kind === 'backfill') setBackfillProgress(result.backfill || { state: 'running' })
+      else setPreviews((old) => ({ ...old, recalibrate: { result, edges: p.edges, applied: true } }))
+      notify(t('请求已提交'), 'ok')
+    } catch (error) { notify(msg(error), 'err') } finally { setBusy(false) }
+  }
 
   const save = async () => {
     setBusy(true)
-    const edges = {}
-    for (const key of Object.keys(DEFAULTS)) edges[key] = Number(form[key])
     try {
+      const edges = edgeValues()
       await ctx.rest('/api/config', { method: 'POST', body: { edges } })
+      setPreviews({})
       notify(t('已保存；下一轮 pass 用新值'), 'ok')
+      seeded.current = false
+      config.reload()
+    } catch (error) {
+      notify(msg(error), 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* 关系接受条件 is what every *later* edge is judged by, so it gets its own button: the
+     candidate-count save above writes these too, but "did I save the rule?" was unanswerable
+     there. This one sends the acceptance fields only (margin + the five minimum confidences). */
+  const savedEdges = (config.data && config.data.effective && config.data.effective.edges) || {}
+  const acceptanceDirty = ACCEPT_FIELDS.some(([key]) => Number(form[key]) !== Number(savedEdges[key] ?? DEFAULTS[key]))
+  const saveAcceptance = async () => {
+    setBusy(true)
+    try {
+      const values = edgeValues()
+      await ctx.rest('/api/config', { method: 'POST', body: { edges: acceptanceEdges(values) } })
+      setPreviews({})
+      notify(t('接受条件已保存：之后的连边按该标准判定'), 'ok')
       seeded.current = false
       config.reload()
     } catch (error) {
@@ -1095,7 +1232,10 @@ function Schedule({ ctx, notify }) {
   const reset = async () => {
     setBusy(true)
     try {
-      await ctx.rest('/api/config', { method: 'POST', body: { edges: null, decision: null, recall: null } })
+      if (!config.data) throw new Error(t('配置尚未加载'))
+      if (!((config.data.overrides || {}).edges)) { setPreviews({}); seeded.current = false; config.reload(); return }
+      await ctx.rest('/api/config', { method: 'POST', body: { edges: Object.fromEntries(Object.keys(DEFAULTS).map((key) => [key, null])) } })
+      setPreviews({})
       notify(t('已恢复默认（清掉 settings.yaml 里的覆盖）'), 'ok')
       seeded.current = false
       config.reload()
@@ -1106,24 +1246,24 @@ function Schedule({ ctx, notify }) {
     }
   }
 
-  return jsxs('div', {
+  return jsxs('div', { className: 'emg-page',
     children: [
       jsx(Card, {
         title: t('预设（每轮问多少对）'),
         children: jsxs('div', {
           className: 'emg-row wrap',
           children: [
-            jsx(Btn, { onClick: () => setForm((old) => ({ ...old, ...PRESETS.light })), children: t('轻') }, 'light'),
-            jsx(Btn, { onClick: () => setForm((old) => ({ ...old, ...PRESETS.normal })), children: t('标准（默认）') }, 'normal'),
-            jsx(Btn, { onClick: () => setForm((old) => ({ ...old, ...PRESETS.deep })), children: t('深') }, 'deep'),
+            jsx(Btn, { onClick: () => preset(PRESETS.light), children: t('轻') }, 'light'),
+            jsx(Btn, { onClick: () => preset(PRESETS.normal), children: t('标准（默认）') }, 'normal'),
+            jsx(Btn, { onClick: () => preset(PRESETS.deep), children: t('深') }, 'deep'),
             jsx('span', { className: 'emg-grow' }),
-            jsx('span', { className: 'emg-sub', children: fmt('每事件 ≈ {0} 对 ≈ {1}（按 8 s/对估算）', pairs, dur(pairs * 8)) })
+            jsx('span', { className: 'emg-sub', children: t('候选来源会去重，实际数量未知；每对 8 秒仅供参考，当前模型速度未知。') })
           ]
         })
       }),
 
       jsx(Card, {
-        title: t('Tier 明细'),
+        title: t('候选选择与成本'),
         children: jsxs('div', {
           children: [
             jsx('div', {
@@ -1145,12 +1285,13 @@ function Schedule({ ctx, notify }) {
                 }, key)
               )
             }),
+            jsx('div', { className: 'emg-sub', children: t('保存未来设置会同时保存候选数量和关系规则；历史操作不会保存未来设置。') }),
             jsxs('div', {
               className: 'emg-row',
               style: { marginTop: 12, flexWrap: 'wrap' },
               children: [
-                jsx(Btn, { primary: true, disabled: busy, onClick: save, children: t('保存') }),
-                jsx(Btn, { disabled: busy, onClick: reset, children: t('全部恢复默认') }),
+                jsx(Btn, { primary: true, disabled: busy, onClick: save, children: t('仅保存未来设置') }),
+                jsx(Btn, { disabled: busy, onClick: reset, children: t('恢复调度默认值') }),
                 jsx('span', { className: 'emg-sub emg-mono emg-trunc', children: (config.data && config.data.file) || t('（无配置文件）') })
               ]
             })
@@ -1158,6 +1299,46 @@ function Schedule({ ctx, notify }) {
         })
       }),
 
+      jsx(Card, {
+        title: t('关系接受条件'),
+        right: jsx('span', { className: 'emg-sub', children: acceptanceDirty ? t('有未保存的改动') : t('已保存') }),
+        children: jsxs('div', {
+          children: [
+            jsx('div', { className: 'emg-grid c3', children: ACCEPT_FIELDS.map(([key, label]) =>
+              jsxs('label', { children: [jsx('span', { className: 'emg-label', children: t(label) }),
+                jsx('input', { className: 'emg-in', type: 'number', min: 0, max: 1, step: 0.01,
+                  value: form[key], onChange: (event) => edit(key, event.target.value) })] }, key)) }),
+            jsxs('div', {
+              className: 'emg-row wrap',
+              style: { marginTop: 12 },
+              children: [
+                jsx(Btn, { primary: true, disabled: busy, onClick: saveAcceptance, children: t('保存接受条件') }),
+                jsx('span', { className: 'emg-sub emg-grow', children: t('保存后，从下一轮 pass 起的连边一律按这里的 margin 与最低置信度判定；已有边不动（要改历史就用下面的重校准预览）。') })
+              ]
+            })
+          ]
+        })
+      }),
+      ...['recalibrate', 'backfill'].map((kind) => jsx(Card, {
+        title: t(kind === 'recalibrate' ? '历史关系重校准' : '历史候选补算'),
+        children: jsxs('div', { children: [
+          jsx('div', { className: 'emg-sub', children: t(kind === 'recalibrate'
+            ? '只重判已有概率的关系；无法使用的记录会跳过。预览不会修改历史。'
+            : '重新选择历史候选需要 Jev 模型判定；耗时和成本不确定。预览不会启动任务。') }),
+          kind === 'recalibrate' ? jsx('div', { className: 'emg-sub', children: t('历史概率格式有歧义，模型来源未知。StartLux 输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。') }) : null,
+          kind === 'recalibrate' ? jsxs('label', { children: [jsx('input', { type: 'checkbox', checked: conditional, onChange: (event) => { conditionalRef.current = event.target.checked; setConditional(event.target.checked); setPreviews((old) => ({ ...old, recalibrate: null })) } }), ' ', t('将条件形式的历史概率按条件概率处理')] }) : null,
+          kind === 'backfill' ? jsx('div', { className: 'emg-sub', children: t('补算使用已保存的关系阈值，不使用未保存的阈值编辑；候选参数使用当前表单。') }) : null,
+          jsxs('div', { className: 'emg-row wrap', style: { marginTop: 8 }, children: [
+            jsx(Btn, { disabled: busy, onClick: () => preview(kind), children: t('预览历史') }),
+            jsx(Btn, { disabled: busy || !previews[kind] || previews[kind].applied, onClick: () => apply(kind), children: t(kind === 'recalibrate' ? '应用历史重校准' : '启动历史候选补算') })
+          ] }),
+          previews[kind] ? jsx('pre', { className: 'emg-log', children: kind === 'recalibrate' ? recalText(previews[kind].result, t) : backfillText(previews[kind].result, t) }) : null,
+          kind === 'backfill' && backfillProgress ? jsxs('div', { children: [
+            jsx('span', { className: 'emg-sub', children: progressText(backfillProgress, t) }),
+            ['running', 'pending'].includes(backfillProgress.state) ? jsx(Btn, { disabled: busy, onClick: async () => { try { await ctx.rest('/api/stop', { method: 'POST', body: {} }); notify(t('已请求停止：本轮做完手上这一对就停'), 'ok') } catch (error) { notify(msg(error), 'err') } }, children: t('停止补算') }) : null
+          ] }) : null
+        ] })
+      }, kind)),
       jsx(Card, {
         title: t('说明'),
         children: jsx('div', { className: 'emg-sub', children: t('Tier1 = 全局向量近邻；Tier2 = 同会话近期 + 未闭环教训 + 决策骨架；Tier3 = 跨项目。改的是 ~/.hermes/eventmem/settings.yaml，下一轮 pass 生效。') })

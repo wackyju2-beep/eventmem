@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>eventmem console harness</title>
+<style>
+/* The desktop app injects these; copied here so the plugin's CSS has something to read. */
+:root{
+  --ui-bg-primary:#242b27; --ui-bg-secondary:#2a312d; --ui-bg-tertiary:#313834;
+  --ui-bg-card:#2b322e; --ui-bg-elevated:#333a36; --ui-bg-editor:#1f2522; --ui-bg-input:#fcfcfc;
+  --ui-stroke-secondary:#3c443f; --ui-text-primary:#dfe6e1; --ui-text-secondary:#a8b2ab;
+  --ui-text-tertiary:#8b968e;
+  --ui-accent:#63b57f; --ui-green:#5fbd82; --ui-red:#d0707f; --ui-blue:#6f9fd8; --ui-orange:#d9a05b;
+  --ui-control-hover-background:#3a423d; --ui-control-active-background:#404842;
+  --font-ui: -apple-system, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+}
+html,body{margin:0;height:100%;background:var(--ui-bg-primary);color:var(--ui-text-primary);
+  font-family:var(--font-ui);font-size:13px}
+#root{height:100%}
+</style>
+</head><body><div id="root"></div><script src="./dist/harness.js"></script></body></html>

@@ -42,6 +42,11 @@ class EdgePolicy:
     #: A real label wins only if it beats the runner-up (「都不是」 included) by this much
     #: on the raw distribution.  The knob the "top1 vs top2" question is about.
     margin: float = 0.15
+    min_conf_change: float = 0.0
+    min_conf_negate: float = 0.0
+    min_conf_repeat: float = 0.0
+    min_conf_because: float = 0.0
+    min_conf_refine: float = 0.0
     #: Q1 — global active heads by vector: minimum cosine and at most this many asked.
     heads_cos_min: float = 0.35
     heads_vec_top_k: int = 10
@@ -192,6 +197,11 @@ def _validate(policy: Any, name: str, warn) -> None:
         if not 0.0 <= policy.margin <= 1.0:
             warn(f"{name}.margin={policy.margin} 不在 0–1；用默认值")
             return False
+        for key in ('min_conf_change', 'min_conf_negate', 'min_conf_repeat',
+                    'min_conf_because', 'min_conf_refine'):
+            if not 0.0 <= getattr(policy, key) <= 1.0:
+                warn(f'{name}.{key} must be between 0 and 1')
+                return False
         if policy.heads_vec_top_k < 1 or policy.session_heads_top_k < 1 or policy.cross_top_k < 1:
             warn(f"{name}.*_top_k 必须 ≥1；用默认值")
             return False
