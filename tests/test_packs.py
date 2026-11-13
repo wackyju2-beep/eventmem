@@ -140,7 +140,7 @@ def test_systemone_parse_keeps_distribution_and_none():
             "axis": {
                 "choice": "改变",
                 "confidence": 0.72,
-                "probabilities": {"重复": 0.1, "改变": 0.72, "否定": 0.08, "其它": 0.1},
+                "probabilities": {"重复": 0.1, "改变": 0.72, "否定": 0.08},
                 "none_probability": 0.1,
             }
         }
@@ -179,7 +179,7 @@ def test_confidence_present_but_unusable_kills_the_slot():
     check_eq(providers.parse_answers("systemone", data, [AXIS]), [None],
              "out-of-range confidence is a malformed answer much as a bad label")
     # 缺字段才回落，写坏了不回落
-    data = {"answers": {"axis": {"choice": "改变", "probabilities": {"改变": 0.6, "否定": 0.4}}}}
+    data = {"answers": {"axis": {"choice": "改变", "probabilities": {"重复": 0, "改变": 0.6, "否定": 0.4}, "none_probability": 0.0}}}
     out = providers.parse_answers("systemone", data, [AXIS])
     assert out is not None
     check_eq(out[0]["confidence"], 0.6, "missing confidence falls back to the choice's probability")
@@ -293,10 +293,11 @@ def test_decisions_tolerates_unordered_probabilities():
     data = {"answers": [{"type": "choice", "name": "axis", "choice": "改变", "confidence": 0.5,
                          "probabilities": [{"value": "none", "probability": 0.2},
                                            {"value": "改变", "probability": 0.5},
-                                           {"value": "无关", "probability": 0.3}]}]}
+                                           {"value": "否定", "probability": 0.2},
+                                           {"value": "重复", "probability": 0.1}]}]}
     out = providers.parse_answers("openai-decisions", data, [AXIS])
     assert out is not None
-    check_eq(out[0]["probabilities"], {"改变": 0.5}, "unknown values are dropped")
+    check_eq(out[0]["probabilities"], {"改变": 0.5, "否定": 0.2, "重复": 0.1}, "unordered labels are retained")
     check_eq(out[0]["none"], 0.2, "none found wherever it sits in the list")
 
 
