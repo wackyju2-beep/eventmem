@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # ``PRAGMA`` statements are deliberately absent: journal_mode / foreign_keys are no-ops inside a
 # transaction, and executescript() commits whatever is pending. ensure_schema() sets them first.
@@ -126,6 +126,16 @@ BEGIN
   SELECT RAISE(IGNORE);
 END;
 
+-- 回合末抽取失败（v10）。抽取模型调用失败或输出不可解析时**不写记忆**：一段没有结论的
+-- 对话不该变成一条记忆，失败本身才是要让人看见的东西，所以只留一行警告给控制台。
+CREATE TABLE IF NOT EXISTS extract_failures (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      REAL NOT NULL,
+  session TEXT,
+  reason  TEXT NOT NULL,                        -- call_failed / unparsable
+  detail  TEXT
+);
+
 -- 墓碑：只有 id + 内容哈希，永不含文本（设计文档 §8）
 CREATE TABLE IF NOT EXISTS tombstones (
   id  INTEGER PRIMARY KEY,
@@ -144,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_ep_project     ON event_projects(project_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst);
 CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src);
 CREATE INDEX IF NOT EXISTS idx_pair_evals_dst ON pair_evals(dst);
+CREATE INDEX IF NOT EXISTS idx_extract_failures_ts ON extract_failures(ts);
 
 -- 每个事件最多一个主项目
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ep_primary

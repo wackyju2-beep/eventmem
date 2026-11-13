@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'core'))
 from eventmem_core.settings import CoreSettings, apply
 from eventmem_core.daemon import Daemon, make_server
+from eventmem_core.schema import SCHEMA_VERSION
 from eventmem_core.store import Store
 
 AXIS = {'改变': .7, '否定': .1, '重复': .1, '都不是': .1}
@@ -122,7 +123,7 @@ class RecalibrationTests(unittest.TestCase):
         ensure_schema(self.store._db)
         self.assertEqual(self.store._db.execute('SELECT rel FROM edges').fetchone()[0], '改变')
         self.assertEqual(self.store._db.execute('SELECT count(*) FROM edge_deletions').fetchone()[0], 0)
-        self.assertEqual(self.store._db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '9')
+        self.assertEqual(self.store._db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
     def test_manual_delete_rolls_back_evidence_when_delete_fails(self):
         self.store.add_edge(2, 1, '改变', .7, 'jev')

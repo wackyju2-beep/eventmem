@@ -591,6 +591,42 @@ def test_stats_counts_events_and_edges():
 
 
 @case
+def test_extraction_failures_surface_on_the_overview_and_can_be_cleared():
+    """抽取失败要出现在概览上（不是只进日志），并且能一键清除。"""
+    tmp = tempfile.mkdtemp(prefix="eventmem-notice-")
+    db = fresh_db()
+    try:
+        _home, packs_dir = home_with_packs(tmp)
+        store = Store(db)
+        try:
+            store.add_extract_failure("call_failed", "APITimeoutError: 60s",
+                                      session="sess-9", ts=1000.0)
+            store.add_extract_failure("unparsable", "这不是 JSON", session="sess-9", ts=2000.0)
+        finally:
+            store.close()
+        with Live(daemon_mod.Daemon(settings_for(db, packs_dir))) as live:
+            status, body = live.get_json("/api/stats")
+            check_eq(status, 200, "GET stats")
+            check_eq(body["failures"]["count"], 2, "两次失败")
+            check_eq([r["reason"] for r in body["failures"]["last"]],
+                     ["unparsable", "call_failed"], "新→旧")
+            check_eq(body["events"], 0, "失败没有写成事件")
+
+            status, body = live.post("/api/notices/clear")
+            check_eq(status, 200, "POST notices/clear")
+            check_eq(body["cleared"], 2, "清掉两条")
+
+            status, body = live.get_json("/api/stats")
+            check_eq(body["failures"]["count"], 0, "清完计数归零")
+            check_eq(body["failures"]["last"], [], "列表也空")
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
+        Path(db).unlink(missing_ok=True)
+
+
+@case
 def test_logs_ring_and_bad_json():
     tmp = tempfile.mkdtemp(prefix="eventmem-logs-")
     db = fresh_db()

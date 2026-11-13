@@ -645,11 +645,43 @@ def test_advance_meta_ts_is_a_high_water_mark(store: Store) -> None:
     assert store.get_meta("nightly_since_ts") == "150.000"
 
 
+# ------------------------------------------------------------------------------- 警告 / 人工编辑
+
+@case
+def test_extract_failures_are_notices_not_events(store: Store) -> None:
+    """抽取失败只留一行警告：不写事件、可列出（新→旧）、可清除、有保留上限。"""
+    assert store.add_extract_failure("call_failed", "timeout", session="s1", ts=100.0) > 0
+    store.add_extract_failure("unparsable", "not json", session="s1", ts=200.0)
+    rows = store.extract_failures(5)
+    assert [r["reason"] for r in rows] == ["unparsable", "call_failed"], rows
+    assert rows[1]["detail"] == "timeout" and rows[0]["session"] == "s1"
+    assert store._db.execute("select count(*) from events").fetchone()[0] == 0, \
+        "a failed extraction must not write an event"
+    assert store.clear_extract_failures() == 2
+    assert store.extract_failures() == []
+
+    for i in range(5):
+        store.add_extract_failure("call_failed", str(i), ts=float(i), keep=3)
+    kept = store.extract_failures(10)
+    assert len(kept) == 3, kept
+    assert [r["detail"] for r in kept] == ["4", "3", "2"], kept
+
+
+@case
+def test_edit_can_carry_a_fresh_vector(store: Store) -> None:
+    """人工改正文时可以一起换向量；不传 vec 时旧向量原样保留。"""
+    eid = store.add_event("决定", "旧正文", vec=b"\x00\x00\x80?" * 2)
+    assert store.update_event(eid, text="新正文") is True
+    assert store.get_event(eid)["vec"] == b"\x00\x00\x80?" * 2, "默认不动向量"
+    assert store.update_event(eid, text="再改一次", vec=b"\x00\x00\x00?" * 2) is True
+    assert store.get_event(eid)["vec"] == b"\x00\x00\x00?" * 2, "传了 vec 就写进去"
+
+
 # ------------------------------------------------------------------------------- schema
 
 @case
 def test_schema_pragmas_and_idempotence(store: Store) -> None:
-    assert SCHEMA_VERSION == 9
+    assert SCHEMA_VERSION == 10
 
     conn = raw(store)
     try:
@@ -661,7 +693,8 @@ def test_schema_pragmas_and_idempotence(store: Store) -> None:
         tables = {r["name"] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         for t in ("projects", "session_project", "events", "event_projects", "edges",
-                  "artifacts", "tombstones", "events_fts", "artifacts_fts", "pair_evals", "edge_deletions"):
+                  "artifacts", "tombstones", "events_fts", "artifacts_fts", "pair_evals",
+                  "edge_deletions", "extract_failures"):
             assert t in tables, t
         assert "pending_turns" not in tables, "v3 的待补表必须在 v4 里被清掉"
 

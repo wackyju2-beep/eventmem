@@ -73,6 +73,7 @@ class FakeStore:
         self._event_id = 100
         self._art_id = 500
         self._project_id = 10
+        self.failures: list[dict] = []
 
     def add_project(self, name: str) -> int:
         pid = self._project_id
@@ -112,6 +113,20 @@ class FakeStore:
 
     def get_artifact(self, aid: int):
         return self.artifacts.get(int(aid))
+
+    # -- 回合抽取失败（v10）：只留警告，不写事件
+    def add_extract_failure(self, reason, detail="", *, session=None, ts=None, keep=200):
+        self.failures.append({"reason": reason, "detail": detail, "session": session,
+                              "ts": ts if ts is not None else time.time()})
+        return len(self.failures)
+
+    def extract_failures(self, limit=5):
+        return list(reversed(self.failures))[: int(limit)]
+
+    def clear_extract_failures(self):
+        n = len(self.failures)
+        self.failures.clear()
+        return n
 
     def add_edge(self, src, dst, rel, conf, decided_by, cross=None) -> None:
         self.edges.append({"src": src, "dst": dst, "rel": rel, "conf": conf,
@@ -716,15 +731,36 @@ def test_sync_turn_writes_nothing_when_extractor_returns_empty():
 
 
 @case
-def test_sync_turn_falls_back_when_extraction_fails():
+def test_sync_turn_records_a_notice_when_the_extraction_call_fails():
+    """抽取模型挂了：不写机械摘要，只在控制台留一条警告。
+
+    机械「用户问…我答…」事件等于往库里灌噪声：那一轮本来就没有值得长期保存的结论，
+    而真正的故障信息（aux 路由断了）被一条假事件盖住了。
+    """
     provider = make_provider()
     with aux_patch(error=RuntimeError("no aux route")):
         provider.on_turn_start(1, "eventmem 的召回是怎么做的？")
         provider.sync_turn("eventmem 的召回是怎么做的？", "向量 + FTS5 → RRF。第二句不该进。",
                            session_id="sess-1")
-    events = list(provider._core.store.events.values())
-    check_eq(len(events), 1, "one fallback event")
-    check(events[0]["text"].startswith("用户问「eventmem 的召回是怎么做的？」"), events[0]["text"])
+    check_eq(provider._core.store.events, {}, "抽取失败不写任何事件")
+    fails = provider._core.store.failures
+    check_eq(len(fails), 1, "一条警告")
+    check_eq(fails[0]["reason"], "call_failed", "原因是调用失败")
+    check("no aux route" in fails[0]["detail"], fails[0]["detail"])
+    check_eq(fails[0]["session"], "sess-1", "警告带上会话")
+
+
+@case
+def test_sync_turn_flags_unparsable_output_and_writes_nothing():
+    provider = make_provider()
+    with aux_patch("这不是 JSON，只是一段解释"):
+        provider.on_turn_start(1, "为什么不用纯向量？")
+        provider.sync_turn("为什么不用纯向量？", "因为字面命中。", session_id="sess-1")
+    check_eq(provider._core.store.events, {}, "解析失败同样不写")
+    fails = provider._core.store.failures
+    check_eq(len(fails), 1, "一条警告")
+    check_eq(fails[0]["reason"], "unparsable", "原因是输出不可解析")
+    check("这不是 JSON" in fails[0]["detail"], fails[0]["detail"])
 
 
 @case

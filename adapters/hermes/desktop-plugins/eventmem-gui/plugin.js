@@ -416,6 +416,8 @@ function Overview({ ctx }) {
   const { data, error, reload } = useFetchAll(ctx, OVERVIEW_PATHS, every)
   const [stats, status, config] = data || [{}, {}, {}]
   const running = Boolean(status && status.live)
+  const [clearing, setClearing] = useState(false)
+  const [clearError, setClearError] = useState('')
 
   useEffect(() => {
     setEvery(running ? OVERVIEW_EVERY_LIVE : OVERVIEW_EVERY)
@@ -428,6 +430,22 @@ function Overview({ ctx }) {
   const kindMax = Math.max(1, ...kindRows.map(([, n]) => n))
   const runs = ((status && status.runs) || []).slice().reverse()
   const chain = (config && config.effective && config.effective.decision && config.effective.decision.backends) || []
+  const failures = (stats && stats.failures) || { count: 0, last: [] }
+
+  /* 抽取失败不是「少了一条记忆」那么轻：那一轮什么都没记。所以它出现在概览最上面，
+     带上原因（调用失败 / 输出不可解析）和一眼能认的事实，而不是埋在日志里。 */
+  const clearFailures = async () => {
+    setClearing(true)
+    setClearError('')
+    try {
+      await ctx.rest('/api/notices/clear', { method: 'POST', body: {} })
+      await reload()
+    } catch (e) {
+      setClearError(msg(e))
+    } finally {
+      setClearing(false)
+    }
+  }
 
   return jsxs('div', { className: 'emg-page',
     children: [
@@ -440,6 +458,41 @@ function Overview({ ctx }) {
         ]
       }),
       error ? jsx(Note, { text: error, kind: 'err' }) : null,
+      clearError ? jsx(Note, { text: clearError, kind: 'err' }) : null,
+
+      failures.count
+        ? jsx(Card, {
+            title: fmt('回合记忆抽取失败（{0} 次）', failures.count),
+            right: jsx(Btn, {
+              tiny: true,
+              disabled: clearing,
+              onClick: clearFailures,
+              children: clearing ? t('清除中…') : t('清除')
+            }),
+            children: [
+              jsx('div', {
+                className: 'emg-sub',
+                style: { marginBottom: 6 },
+                children: t('这些回合没有写进任何记忆：抽取模型没给出可用的 0–3 条事件，系统不会再用机械摘要兜底。修好模型后点「清除」。')
+              }),
+              ...(failures.last || []).map((row) =>
+                jsxs(
+                  'div',
+                  {
+                    className: 'emg-line first',
+                    children: [
+                      jsx('span', { className: 'emg-sub', style: { width: 132 }, children: when(row.ts) }),
+                      jsx('span', { style: { width: 84 }, children: row.reason === 'unparsable' ? t('输出无法解析') : t('调用失败') }),
+                      jsx('span', { className: 'emg-grow emg-trunc', title: row.detail || '', children: row.detail || '—' }),
+                      jsx('span', { className: 'emg-sub', children: row.session ? String(row.session).slice(0, 10) : '—' })
+                    ]
+                  },
+                  String(row.ts + (row.session || ''))
+                )
+              )
+            ]
+          })
+        : null,
 
       jsxs('div', {
         className: 'emg-grid c2',

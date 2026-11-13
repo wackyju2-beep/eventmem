@@ -129,6 +129,47 @@ class GraphSemanticTests(unittest.TestCase):
         payload = graph._read_graph()
         self.assertEqual(payload['vectors'], {'events': 3, 'dim': 64})
 
+    def test_editing_text_re_embeds_the_vector(self):
+        """保存并更新：正文改了，``events.vec`` 必须跟着改。
+
+        Otherwise the vector arm keeps recalling the old sentence — the edit lands in the
+        graph and the FTS index but never in semantic search.
+        """
+        import asyncio
+
+        eid = self.ids['train']
+        before = self.store._db.execute('SELECT vec FROM events WHERE id=?', (eid,)).fetchone()[0]
+        res = asyncio.run(graph.patch_event(
+            eid, {'text': '训练 embedding 时把批次调小到 2，避免显存爆表'}))
+        self.assertEqual(res['vector'], 'updated')
+        self.assertEqual(res['dim'], 64)
+        after = self.store._db.execute('SELECT vec FROM events WHERE id=?', (eid,)).fetchone()[0]
+        self.assertNotEqual(before, after, 'the stored vector must be re-encoded')
+        self.assertEqual(
+            after,
+            vec_for(self.encoder, '[eventmem] 决定 训练 embedding 时把批次调小到 2，避免显存爆表'),
+            'same payload shape as add_event ([项目] 类型 正文)',
+        )
+
+    def test_editing_keeps_the_text_when_the_encoder_is_down(self):
+        import asyncio
+
+        class Down:
+            def available(self):
+                return False
+
+            def reason(self):
+                return 'model not found under /nowhere'
+
+        graph._encoder = lambda: Down()
+        eid = self.ids['graph']
+        res = asyncio.run(graph.patch_event(eid, {'text': '图谱按关系筛边（人工改）'}))
+        self.assertEqual(res['vector'], 'skipped')
+        self.assertIn('model not found', res['note'])
+        row = self.store._db.execute('SELECT text, vec FROM events WHERE id=?', (eid,)).fetchone()
+        self.assertEqual(row['text'], '图谱按关系筛边（人工改）', '正文照常保存')
+        self.assertIsNotNone(row['vec'], '旧的向量不能被清空')
+
     def test_route_is_mounted_under_the_plugin_prefix(self):
         """The desktop reaches it as POST /api/plugins/eventmem-graph/semantic."""
         try:

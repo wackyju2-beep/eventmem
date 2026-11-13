@@ -680,6 +680,48 @@ class Store:
                 db.rollback()
                 raise
 
+    # ------------------------------------------------ 回合抽取失败（v10）
+
+    def add_extract_failure(self, reason: str, detail: str = "", *, session: Optional[str] = None,
+                            ts: Optional[float] = None, keep: int = 200) -> int:
+        """Record one failed turn-end extraction; no event is written for that turn.
+
+        Kept as a *notice*, not an event: the turn produced nothing worth remembering, and
+        what an operator needs to see is the failure (a broken aux model), not a mechanical
+        restatement of the question.  Retention is capped so a permanently broken model
+        cannot grow the file without bound.
+        """
+        stamp = float(ts if ts is not None else time.time())
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO extract_failures(ts, session, reason, detail) VALUES(?,?,?,?)",
+                (stamp, session or None, str(reason or "unknown"), (detail or "")[:400]),
+            )
+            cap = max(1, int(keep))
+            self._db.execute(
+                "DELETE FROM extract_failures WHERE id NOT IN "
+                "(SELECT id FROM extract_failures ORDER BY id DESC LIMIT ?)",
+                (cap,),
+            )
+            self._db.commit()
+        return int(cur.lastrowid or 0)
+
+    def extract_failures(self, limit: int = 5) -> list[dict]:
+        """Newest first: ``{id, ts, session, reason, detail}``."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, ts, session, reason, detail FROM extract_failures "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (max(1, int(limit)),),
+            ).fetchall()
+        return [{"id": int(r["id"]), "ts": float(r["ts"]), "session": r["session"],
+                 "reason": r["reason"], "detail": r["detail"]} for r in rows]
+
+    def clear_extract_failures(self) -> int:
+        with self._lock:
+            cur = self._db.execute("DELETE FROM extract_failures")
+            self._db.commit()
+        return int(cur.rowcount or 0)
+
     # ------------------------------------------------ manual edits (可视化界面)
 
     def update_event(
@@ -689,11 +731,13 @@ class Store:
         text: Optional[str] = None,
         kind: Optional[str] = None,
         edited_ts: Optional[float] = None,
+        vec: Any = None,
     ) -> bool:
         """Edit an event's text/kind and stamp ``edited_ts`` (rainbow highlight in the graph).
 
-        The FTS trigger keeps the lexical index in sync. The stored vector is deliberately left
-        alone: a typo fix must not evict the event from the vector arm.
+        The FTS trigger keeps the lexical index in sync.  ``vec`` is optional on purpose: a
+        typo fix does not have to evict the event from the vector arm, so the caller decides
+        whether to re-encode (the graph's editor always does — its button says so).
         """
         sets: list[str] = []
         params: list[Any] = []
@@ -710,6 +754,9 @@ class Store:
             params.append(kind)
         if not sets:
             return False
+        if vec is not None:
+            sets.append("vec = ?")
+            params.append(_as_bytes(vec))
         sets.append("edited_ts = ?")
         params.append(float(edited_ts if edited_ts is not None else time.time()))
         params.append(int(eid))

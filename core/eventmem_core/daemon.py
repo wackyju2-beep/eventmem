@@ -286,7 +286,8 @@ class Daemon:
         """Counts for the overview page.  A read-only connection, so a running pass is safe."""
         path = self.settings.db_path
         empty: dict[str, Any] = {"events": 0, "edges": 0, "pairs": 0, "kinds": {},
-                                 "projects": [], "newest": 0}
+                                 "projects": [], "newest": 0,
+                                 "failures": {"count": 0, "last": []}}
         if not path or not os.path.exists(path):
             return empty
         try:
@@ -301,6 +302,19 @@ class Daemon:
                                 "left join projects p on p.id = e.project_id "
                                 "group by 1 order by 2 desc limit 8").fetchall()]
                 newest = conn.execute("select max(ts) from events").fetchone()[0] or 0
+                # 回合末抽取失败（v10）：一次失败 = 那一轮什么都没记。概览页要能一眼看到，
+                # 而不是等用户发现「怎么没记住」再翻日志。老库没有这张表时按 0 处理。
+                try:
+                    failures = [
+                        {"ts": float(r[0]), "session": r[1], "reason": r[2], "detail": r[3]}
+                        for r in conn.execute(
+                            "select ts, session, reason, detail from extract_failures "
+                            "order by ts desc, id desc limit 5").fetchall()
+                    ]
+                    failed = int(conn.execute("select count(*) from extract_failures")
+                                 .fetchone()[0])
+                except sqlite3.Error:
+                    failures, failed = [], 0
                 return {
                     "events": count("select count(*) from events"),
                     "edges": count("select count(*) from edges"),
@@ -308,11 +322,29 @@ class Daemon:
                     "kinds": kinds,
                     "projects": projects,
                     "newest": float(newest),
+                    "failures": {"count": failed, "last": failures},
                 }
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001 - the page must render even if the db is busy
             return {**empty, "error": str(exc)}
+
+    def clear_notices(self) -> tuple[int, dict[str, Any]]:
+        """Clear the extraction-failure notices (the operator fixed the model)."""
+        path = self.settings.db_path
+        if not path or not os.path.exists(path):
+            return 200, {"ok": True, "cleared": 0}
+        try:
+            conn = sqlite3.connect(path, timeout=5.0)
+            try:
+                conn.execute("PRAGMA busy_timeout=5000")
+                cur = conn.execute("DELETE FROM extract_failures")
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            return 503, {"error": f"清除失败：{exc}"}
+        return 200, {"ok": True, "cleared": int(cur.rowcount or 0)}
 
     def config_view(self) -> dict[str, Any]:
         """Effective settings, the file that produced them, and whether we may write it."""
@@ -715,6 +747,8 @@ class Daemon:
             return 200, self.status()
         if method == "GET" and tail == ["stats"]:
             return 200, self.stats()
+        if method == "POST" and tail == ["notices", "clear"]:
+            return self.clear_notices()
         if method == "GET" and tail == ["logs"]:
             return 200, {"logs": list(self.logs)}
         if method == "GET" and tail == ["config"]:

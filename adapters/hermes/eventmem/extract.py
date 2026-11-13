@@ -21,12 +21,30 @@ from . import host
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AUX_TASK", "extract_system", "extract_events", "parse_events", "squash",
-           "first_sentence"]
+__all__ = ["AUX_TASK", "ExtractError", "extract_system", "extract_events", "parse_events",
+           "squash", "first_sentence"]
 
 #: ``register()`` registers this as an auxiliary task, so it appears in the config
 #: (``auxiliary.eventmem_extract.*``) and can be pointed at its own model.
 AUX_TASK = "eventmem_extract"
+
+#: Why a turn-end extraction produced nothing usable.  ``reason`` is a stable token the
+#: console translates; ``detail`` is the operator-facing "what actually broke".
+CALL_FAILED = "call_failed"
+UNPARSABLE = "unparsable"
+
+
+class ExtractError(RuntimeError):
+    """The auxiliary call failed or its output was not the JSON we asked for.
+
+    Raised instead of returning ``None`` so the caller can put the *reason* on the
+    console: a dead aux route and a model that ignores the format need different fixes.
+    """
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = str(reason or CALL_FAILED)
+        self.detail = str(detail or "")
 
 
 def extract_system() -> str:
@@ -110,8 +128,13 @@ def parse_events(raw: str, kinds: tuple[str, ...], limit: int = 3) -> Optional[l
 
 
 def extract_events(question: str, answer: str, *, kinds: tuple[str, ...],
-                   limit: int = 3) -> Optional[list[dict[str, Any]]]:
-    """Ask the auxiliary model to distill the turn; ``None`` when the call/parse failed."""
+                   limit: int = 3) -> list[dict[str, Any]]:
+    """Ask the auxiliary model to distill the turn.
+
+    Returns ``[]`` when the model says nothing is worth recording, a list otherwise.
+    Raises :class:`ExtractError` when the call or the parse failed — the caller records
+    that as a console notice; it must **not** invent a mechanical event for the turn.
+    """
     try:
         response = _aux_llm([
             {"role": "system", "content": extract_system()},
@@ -119,10 +142,11 @@ def extract_events(question: str, answer: str, *, kinds: tuple[str, ...],
              % (question, answer)},
         ])
         raw = response.choices[0].message.content or ""
-    except Exception as exc:  # noqa: BLE001 - caller falls back to the mechanical record
+    except Exception as exc:  # noqa: BLE001 - surface the reason, never a fallback event
         logger.warning("eventmem: extraction call failed (%s)", exc)
-        return None
+        raise ExtractError(CALL_FAILED, f"{type(exc).__name__}: {exc}") from exc
     parsed = parse_events(raw, kinds, limit)
     if parsed is None:
         logger.warning("eventmem: extraction returned unparsable output")
+        raise ExtractError(UNPARSABLE, squash(raw, 300))
     return parsed

@@ -35,6 +35,13 @@
       <div class="sub" id="n-lag">—</div></div>
   </div>
 
+  <div class="card" id="notice-card" style="display:none;margin-top:14px">
+    <h2>回合记忆抽取失败 <span class="sub" id="notice-count"></span>
+      <button class="btn" id="notice-clear" style="float:right">清除</button></h2>
+    <div class="sub">这些回合没有写进任何记忆：抽取模型没给出可用的 0–3 条事件，系统不会再用机械摘要兜底。修好模型后点「清除」。</div>
+    <table id="notices"><tbody></tbody></table>
+  </div>
+
   <div class="grid c2">
     <div class="card">
       <h2>kind 分布</h2>

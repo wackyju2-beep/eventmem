@@ -34,6 +34,7 @@ import eventmem_core.decision as decision  # noqa: E402
 import eventmem_core.packs as packs  # noqa: E402
 import eventmem_core.runtime as runtime  # noqa: E402
 import eventmem_core.worker as worker  # noqa: E402
+from eventmem_core.schema import SCHEMA_VERSION  # noqa: E402
 from eventmem_core.settings import CoreSettings, DecisionPolicy  # noqa: E402
 from eventmem_core.store import Store  # noqa: E402
 
@@ -200,7 +201,7 @@ def test_health_and_status_endpoints():
             check_eq(status, 200, "health status")
             check_eq(body["status"], "ok", "health body")
             check_eq(body["db"], db, "db path echoed")
-            check_eq(body["schema"], 9, "schema version")
+            check_eq(body["schema"], SCHEMA_VERSION, "schema version")
 
             status, body = api.request("/api/status")
             check_eq(status, 200, "status code")

@@ -51,6 +51,15 @@ EN: dict[str, str] = {
     "{0} 对已判": "{0} pairs judged",
     "落后 {0}": "behind {0}",
     "{0} 对 / {1} 边": "{0} pairs / {1} edges",
+    # ---- 回合记忆抽取失败（v10） -------------------------------------------
+    "回合记忆抽取失败（{0} 次）": "Turn-end extraction failed ({0}×)",
+    "这些回合没有写进任何记忆：抽取模型没给出可用的 0–3 条事件，系统不会再用机械摘要兜底。修好模型后点「清除」。":
+        "These turns wrote no memory at all: the extractor returned no usable 0–3 events, "
+        "and no mechanical summary is invented as a fallback. Fix the model, then clear.",
+    "调用失败": "call failed",
+    "输出无法解析": "unparsable output",
+    "清除": "Clear",
+    "清除中…": "Clearing…",
     # ---- live strip -------------------------------------------------------
     "正在使用": "Using",
     "对": "pairs",

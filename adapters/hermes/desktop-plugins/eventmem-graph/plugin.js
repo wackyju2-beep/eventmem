@@ -1793,6 +1793,7 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
   const [kind, setKind] = useState(atom.kind)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [note, setNote] = useState(null)
   useEffect(() => {
     setText(atom.text)
     setKind(atom.kind)
@@ -1801,12 +1802,21 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
 
   const dirty = text.trim() !== atom.text || kind !== atom.kind
   const mine = scene.edges.filter(e => e.src === atom.id || e.dst === atom.id)
+  const says = note && note.id === atom.id ? note.text : ''
 
   const save = async () => {
     setBusy(true)
     setErr('')
+    setNote(null)
     try {
-      await ctx.rest(`/events/${atom.id}`, { method: 'PATCH', body: { text, kind } })
+      const res = await ctx.rest(`/events/${atom.id}`, { method: 'PATCH', body: { text, kind } })
+      // 后端会连同 Embedding 向量一起重算；编码器不可用时只有正文落下，必须说出来。
+      setNote({
+        id: atom.id,
+        text: res && res.vector === 'updated'
+          ? `已保存，Embedding 向量已重算（${res.dim} 维）`
+          : `已保存正文；向量没有更新：${(res && res.note) || '未知原因'}`
+      })
       await onSaved()
     } catch (e) {
       setErr(String(e?.message || e))
@@ -1864,6 +1874,7 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
         ]
       }),
       err ? jsx('div', { className: 'em-error', children: err }) : null,
+      says ? jsx('div', { className: 'em-hintline', children: says }) : null,
       jsxs('div', {
         className: 'em-actions',
         children: [
@@ -1872,10 +1883,10 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
             variant: 'default',
             disabled: busy || !dirty || !text.trim(),
             onClick: save,
-            children: busy ? '保存中…' : '保存'
+            children: busy ? '保存中…' : '保存并更新向量'
           }),
           dirty
-            ? jsx('span', { className: 'em-hint', children: '保存后这条原子会蒙上彩虹描边' })
+            ? jsx('span', { className: 'em-hint', children: '保存会重算这条的 Embedding 向量（彩虹描边）' })
             : jsx('span', { className: 'em-hint', children: '未改动' })
         ]
       }),

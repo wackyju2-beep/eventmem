@@ -132,7 +132,30 @@ async function refreshOverview() {
   $("chain-overview").innerHTML = chain.length
     ? chain.map((n, i) => `<span class="item">${i + 1}. ${esc(n)}</span>`).join("")
     : `<span class="sub">空（用 decision.url 单端点）</span>`;
+
+  /* 抽取失败：那一轮什么都没写。放在概览最上面，不让它只活在日志里。 */
+  const failures = stats.failures || { count: 0, last: [] };
+  const card = $("notice-card");
+  card.style.display = failures.count ? "" : "none";
+  if (failures.count) {
+    $("notice-count").textContent = `（${failures.count} 次）`;
+    $("notices").querySelector("tbody").innerHTML = (failures.last || []).map((r) => `<tr>
+        <td class="sub">${when(r.ts)}</td>
+        <td>${r.reason === "unparsable" ? "输出无法解析" : "调用失败"}</td>
+        <td>${esc(r.detail || "—")}</td>
+        <td class="sub">${esc((r.session || "—").slice(0, 10))}</td></tr>`).join("");
+  }
 }
+
+$("notice-clear").onclick = async () => {
+  try {
+    const r = await api("/api/notices/clear", {});
+    toast(`已清除 ${r.cleared ?? 0} 条警告`, "ok");
+    refresh("overview");
+  } catch (e) {
+    toast(e.message, "err");
+  }
+};
 
 /* ------------------------------------------------------------------ backends */
 

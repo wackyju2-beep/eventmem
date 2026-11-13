@@ -34,7 +34,15 @@ const CANNED = {
     pairs: 905,
     newest: 1794419860,
     kinds: { 决定: 41, 结果: 120, 教训: 33 },
-    projects: [{ name: 'eventmem', events: 120, last: 1794419860 }, { name: 'unfiled', events: 8, last: 1794419000 }]
+    projects: [{ name: 'eventmem', events: 120, last: 1794419860 }, { name: 'unfiled', events: 8, last: 1794419000 }],
+    // 抽取失败的警告卡（v10）：两条就够看，一条调用失败、一条输出不可解析。
+    failures: {
+      count: 2,
+      last: [
+        { ts: 1794419500, session: 'sess-20261113-abcdef', reason: 'call_failed', detail: 'APITimeoutError: upstream timed out after 60s' },
+        { ts: 1794418000, session: 'sess-20261112-123456', reason: 'unparsable', detail: 'the model answered with prose instead of JSON' }
+      ]
+    }
   },
   '/api/status': {
     cursor: { events: 0, behind: 42 },

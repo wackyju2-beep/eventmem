@@ -71,7 +71,8 @@ def schemas(settings: CoreSettings) -> list[dict[str, Any]]:
                 "问答也要记：把「用户问了什么 + 结论/依据是什么」写成一条结果或教训，"
                 "不能因为没动文件就不记。\n"
                 "只有寒暄、纯确认、复述已知内容可以传空数组；实质回合没写（或传空数组），"
-                "回合结束后插件会用机械摘要自动补一条。",
+                "回合结束后插件会再读一遍这一轮，把结论补记下来（抽取失败则不写记忆，"
+                "只在控制台留下一条警告）。",
                 f"Record what happened this turn (0–{limit} events). Write them in the last "
                 "tool call of the turn.\n"
                 "Three tests:\n"
@@ -84,8 +85,9 @@ def schemas(settings: CoreSettings) -> list[dict[str, Any]]:
                 "Q&A counts too: write what the user asked plus the conclusion or its basis as a "
                 "结果 or a 教训 — don't skip it just because no file changed.\n"
                 "An empty array is only for greetings, bare confirmations and restating what is "
-                "already known; if a substantive turn writes nothing, the plugin appends a "
-                "mechanical summary after the turn.",
+                "already known; if a substantive turn writes nothing, the plugin reads the turn "
+                "once more after it ends and records the conclusion (a failed extraction "
+                "records no memory at all — it only leaves a warning on the console).",
             ),
             "parameters": {
                 "type": "object",

@@ -27,7 +27,7 @@ from eventmem_core.settings import CoreSettings
 
 from . import settings as S
 from . import tools
-from .extract import extract_events, first_sentence, squash
+from .extract import ExtractError, extract_events, squash
 from .host import spawn_context_thread
 
 logger = logging.getLogger(__name__)
@@ -237,15 +237,15 @@ class EventMemProvider(MemoryProvider):
             return
 
         limit = int(self._settings.max_events_per_call)
-        events = extract_events(question, answer, kinds=("决定", "尝试", "结果", "变更", "教训"),
-                                limit=limit)
-        if events is None:
-            # 抽取调用失败：留一条机械记录，至少不丢这一轮。
-            events = [{
-                "kind": "结果",
-                "text": tr("用户问「%s」，我答：%s", 'User asked "%s"; I answered: %s') % (
-                    squash(user_content, 60), first_sentence(assistant_content, 90)),
-            }]
+        try:
+            events = extract_events(question, answer,
+                                    kinds=("决定", "尝试", "结果", "变更", "教训"), limit=limit)
+        except ExtractError as exc:
+            # 抽取失败就**不写记忆**：这一轮没有值得长期保存的结论，机械复述一遍问题只是
+            # 往库里灌噪声。失败本身留一行警告给控制台（概览页），由人去修模型配置。
+            core.note_extract_failure(exc.reason, exc.detail,
+                                      session=session_id or self._session_id or None)
+            return
         if not events:
             logger.info("eventmem: extractor found nothing worth recording")
             return

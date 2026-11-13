@@ -360,6 +360,55 @@ def semantic(body: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- write
 
 
+def _vec_blob(vec: Any) -> Optional[bytes]:
+    """float32 bytes for ``events.vec``: numpy arrays, bytes, or a plain list."""
+    if vec is None:
+        return None
+    raw = getattr(vec, "tobytes", None)
+    if callable(raw):
+        return raw()
+    if isinstance(vec, (bytes, bytearray, memoryview)):
+        return bytes(vec)
+    try:
+        import struct
+
+        return struct.pack("<%df" % len(vec), *[float(x) for x in vec])
+    except Exception:  # noqa: BLE001 - a bad vector must not fail the edit
+        return None
+
+
+def _reembed(conn: sqlite3.Connection, eid: int) -> tuple[str, int, str]:
+    """Re-encode one event from its stored text/kind/project.
+
+    Same payload as ``EventMem.add_event`` (``[项目] 类型 正文``) so an edited event keeps
+    competing in the vector arm with the text a human just approved.  Returns
+    ``(state, dim, note)`` where state is ``updated`` / ``skipped``; a missing encoder skips
+    the vector only — the text edit always lands.
+    """
+    row = conn.execute(
+        "SELECT e.kind AS kind, e.text AS text, p.name AS project FROM events e "
+        "LEFT JOIN projects p ON p.id = e.project_id WHERE e.id = ?", (int(eid),)
+    ).fetchone()
+    if row is None:
+        return "skipped", 0, "事件不存在"
+    try:
+        encoder = _encoder()
+    except Exception as exc:  # noqa: BLE001
+        return "skipped", 0, f"Embedding 编码器不可用：{exc}"
+    check = getattr(encoder, "available", None)
+    if callable(check) and not check():
+        reason = getattr(encoder, "reason", None)
+        detail = reason() if callable(reason) else "encoder unavailable"
+        return "skipped", 0, f"Embedding 编码器不可用：{detail}"
+    payload = "[%s] %s %s" % (row["project"] or "未归类", row["kind"], row["text"])
+    vec = encoder.encode(payload)
+    blob = _vec_blob(vec)
+    if not blob:
+        return "skipped", 0, "Embedding 编码失败（模型文件或运行时缺失）"
+    conn.execute("UPDATE events SET vec = ? WHERE id = ?", (blob, int(eid)))
+    return "updated", len(blob) // 4, ""
+
+
 @router.patch("/events/{eid}")
 async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
     text = body.get("text")
@@ -388,10 +437,12 @@ async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
         params.append(time.time())
         params.append(int(eid))
         cur = conn.execute(f"UPDATE events SET {', '.join(sets)} WHERE id = ?", params)
-        conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail=f"事件 #{eid} 不存在")
-        return {"ok": True, "id": int(eid)}
+        # 改完正文就重算向量：否则检索（向量臂）还在用旧文本，改了半天召回不到。
+        state, dim, note = _reembed(conn, int(eid))
+        conn.commit()
+        return {"ok": True, "id": int(eid), "vector": state, "dim": int(dim), "note": note}
     except sqlite3.Error as exc:
         conn.rollback()
         raise HTTPException(status_code=503, detail=f"写入失败：{exc}") from exc

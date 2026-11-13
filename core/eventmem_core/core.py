@@ -12,6 +12,7 @@ new capabilities get a method here rather than a public module.
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -23,6 +24,8 @@ from .settings import CoreSettings
 from .store import UNFILED, Store
 
 __all__ = ["EventMem", "UNFILED"]
+
+logger = logging.getLogger(__name__)
 
 
 def _vector_bytes(vec: Any) -> Optional[bytes]:
@@ -218,6 +221,41 @@ class EventMem:
             return False
         forget(int(event_id))
         return True
+
+    # -- turn-end extraction failures ---------------------------------------
+
+    def note_extract_failure(self, reason: str, detail: str = "",
+                             session: Optional[str] = None) -> Optional[int]:
+        """Record a failed turn-end extraction instead of writing a mechanical event.
+
+        Never raises: a broken notice must not break the turn either.
+        """
+        fn = getattr(self.store, "add_extract_failure", None)
+        if not callable(fn):
+            return None
+        try:
+            return int(fn(str(reason or "unknown"), str(detail or ""), session=session) or 0)
+        except Exception as exc:  # noqa: BLE001 - a notice is best-effort
+            logger.warning("eventmem: could not record extraction failure (%s)", exc)
+            return None
+
+    def extract_failures(self, limit: int = 5) -> list[dict]:
+        fn = getattr(self.store, "extract_failures", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(int(limit)) or [])
+        except Exception:  # noqa: BLE001
+            return []
+
+    def clear_extract_failures(self) -> int:
+        fn = getattr(self.store, "clear_extract_failures", None)
+        if not callable(fn):
+            return 0
+        try:
+            return int(fn() or 0)
+        except Exception:  # noqa: BLE001
+            return 0
 
     def add_link(self, src: int, dst: int, rel: str, conf: float = 1.0,
                  decided_by: str = "llm_batch") -> dict:
