@@ -179,6 +179,10 @@ Windows 侧三件事缺一不可：① LM Studio「在网络中提供服务」�
 
 ## Windows 形态（已实测 2026-11-12）
 
+**2026-11-14 起先试 `install.ps1`**：它建 venv、生成 `<home>\eventmem\daemon.cmd`、启动 daemon、
+注册登录自启（无管理员权限时退回 Startup 快捷方式）、跑 `tools/selfcheck.py`。下面这段手工
+schtasks 只作参考，单机部署不用再抄。
+
 daemon 在 Windows 上用**计划任务**跑，不用服务。实测通过的做法：
 
 ```bat

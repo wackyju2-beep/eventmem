@@ -192,6 +192,40 @@ the judge two questions per pair, writes edges that pass the margin, and advance
 
 ## Install
 
+### One machine (Windows + DSH)
+
+```powershell
+git clone https://github.com/wackyju2-beep/eventmem D:\eventmem
+cd D:\eventmem
+.\install.cmd
+```
+
+`install.ps1` does four things: creates a virtualenv and installs `core` (with the vector arm),
+writes `daemon.cmd` and starts it on `127.0.0.1:9123`, registers autostart at logon, and runs a
+self-check that prints what works. Everything lives under
+`<HERMES_HOME or %USERPROFILE%\.hermes>\eventmem\` (database, models, backends, log).
+
+Python 3.12 is installed through winget when missing; pass `-NoPythonInstall` to keep the script
+off the system. Other switches: `-Port 9123`, `-NoVector` (skip onnxruntime), `-NoAutostart`,
+`-Uninstall` (stop and remove autostart, keep the database).
+
+Then in DSH: **Plugins → Add plugin**, and pick this repository's `adapters\dsh`. No tunnel setup
+is needed on one machine — the plugin probes `baseUrl` first and adopts a daemon that answers on
+9123. Relation edges need a backend: open `http://127.0.0.1:9123/` → **Backends**, or download a
+GGUF from **Models** (~2.4 GB).
+
+Self-check any time:
+
+```powershell
+~\.hermes\eventmem\venv\Scripts\python.exe tools\selfcheck.py
+```
+
+The encoder (semantic recall) is optional: drop the Qwen3-Embedding-0.6B ONNX (`tokenizer.json` +
+`model_int8.onnx`) into `...\eventmem\models\`. Without it recall is FTS5-only, and the self-check
+says so instead of staying silent.
+
+### Hermes (Linux / systemd)
+
 ```bash
 git clone https://github.com/wackyju2-beep/hermes-eventmem ~/eventmem
 cd ~/eventmem && ./install.sh

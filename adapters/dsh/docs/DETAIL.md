@@ -1,9 +1,9 @@
 # eventmem memory for DeepSeek Harness
 
 This plugin gives the Harness a shared, long-term event memory without giving it the
-database. The library lives on a separate Mint machine behind an SSH tunnel; the daemon
-exposes a thin REST mirror of the core (`/api/mem/*`), and this plugin is a client of
-that mirror.
+database. The library normally lives on the same machine; when the Harness runs somewhere
+else it lives there instead, behind an SSH tunnel. In both cases the daemon exposes a thin
+REST mirror of the core (`/api/mem/*`), and this plugin is a client of that mirror.
 
 ## What you get
 

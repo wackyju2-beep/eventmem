@@ -132,7 +132,14 @@ class Encoder:
         if missing:
             self._error = f"{missing} missing"
             return False
-        return _np is not None and self._resolve() is not None
+        if _np is None:
+            self._error = "numpy missing"
+            return False
+        if self._resolve() is None:
+            if not self._error:
+                self._error = f"model not found under {self._root}"
+            return False
+        return True
 
     def reason(self) -> str:
         """Why :meth:`available` is False (``""`` when it is True)."""

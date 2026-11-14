@@ -1,6 +1,7 @@
 # dsh-eventmem — the DSH adapter for eventmem
 
-DSH runs on Windows; the event memory database lives on the Mint box. This bundle is a
+DSH runs on Windows; the event memory database runs wherever the daemon runs — on the same
+machine, or on another one reachable over SSH. This bundle is a
 **pure HTTP client** for the daemon's `/api/mem/*` data plane: it does not import
 `eventmem_core`, does not touch `events.db`, and does not re-implement recall or edge
 judgement. Every memory decision stays in the daemon; this side only translates host
@@ -124,6 +125,11 @@ plugin_manager action=install_bundle target=D:\eventmem\adapters\dsh
 ```
 
 The bundle's `cordis.patch.yml` mounts one row named `eventmem`; config lives there.
+
+**One machine (no SSH).** Run the repository's `install.ps1` first: it installs the daemon and
+serves it on `127.0.0.1:9123`. The default config then works unchanged — activation probes
+`baseUrl`, and a daemon that already answers is adopted, so no `ssh` is spawned. Set
+`tunnel: false` when the plugin should never touch ssh at all.
 
 ## Config (row `config`)
 

@@ -174,6 +174,36 @@ auxiliary 模型，从这轮问答里抽 0–3 条；寒暄在调模型之前就
 
 ## 安装
 
+### 一台电脑（Windows + DSH）
+
+```powershell
+git clone https://github.com/wackyju2-beep/eventmem D:\eventmem
+cd D:\eventmem
+.\install.cmd
+```
+
+`install.ps1` 做四件事：建 venv 并装 `core`（默认带向量臂）、生成 `daemon.cmd` 并启动
+`127.0.0.1:9123`、注册登录自启、跑一次自检并把结果打出来。数据全在
+`<HERMES_HOME 或 %USERPROFILE%\.hermes>\eventmem\`（库、模型、后端、日志都在这）。
+
+没装 Python 会先试着用 winget 装 3.12；不想让它动系统就加 `-NoPythonInstall`。其它开关：
+`-Port 9123`、`-NoVector`（省掉 onnxruntime）、`-NoAutostart`、`-Uninstall`（停服务并移除自启，库保留）。
+
+装完在 DSH 里 **插件 → 添加插件**，选本仓库的 `adapters\dsh`。单机不用改隧道配置：
+daemon 在 9123 上应答时插件直接用它，不会去 ssh。要关系边再进控制台
+`http://127.0.0.1:9123/` 的 **后端** 建 pack（或 **模型** 页下 GGUF，约 2.4 GB）。
+
+随时可以自检：
+
+```powershell
+~\.hermes\eventmem\venv\Scripts\python.exe tools\selfcheck.py
+```
+
+编码器（语义召回）是可选的：把 Qwen3-Embedding-0.6B 的 ONNX（`tokenizer.json` +
+`model_int8.onnx`）放进 `...\eventmem\models\`。缺了召回只用 FTS5，自检会直接说明。
+
+### Hermes（Linux / systemd）
+
 ```bash
 git clone https://github.com/wackyju2-beep/hermes-eventmem ~/eventmem
 cd ~/eventmem && ./install.sh
