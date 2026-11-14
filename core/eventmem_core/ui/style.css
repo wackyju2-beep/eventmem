@@ -77,6 +77,23 @@ section.on { display: block; }
 .big { font-family: var(--mono); font-size: 26px; line-height: 1.1; }
 .sub { color: var(--muted); font-size: 12px; }
 
+/* 数字翻页（概览三块砖）：只让变了的位翻一次，逗号/未变的位原地不动。
+   新数字用 backwards 延迟露脸，旧数字翻走的那一下正好盖住它，所以不必铺底色。 */
+.flip { display: inline-flex; align-items: baseline; }
+.flip-cell { position: relative; display: inline-block; min-width: .56em; text-align: center; }
+.flip-cell .out { position: absolute; inset: 0; transform-origin: 50% 100%;
+  animation: flip-out .18s ease-in forwards; }
+.flip-cell .to.on { display: inline-block; transform-origin: 50% 0;
+  animation: flip-in .2s .09s ease-out backwards; }
+@keyframes flip-out { from { transform: rotateX(0); opacity: 1; }
+  to { transform: rotateX(-92deg); opacity: 0; } }
+@keyframes flip-in { from { transform: rotateX(92deg); opacity: 0; }
+  to { transform: rotateX(0); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .flip-cell .out { animation: none; opacity: 0; }
+  .flip-cell .to.on { animation: none; }
+}
+
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; font-size: 12px; }

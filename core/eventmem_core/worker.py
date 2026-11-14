@@ -117,7 +117,7 @@ def run_once(settings: CoreSettings, *, ensure: bool = True,
         run_start = time.time()
         jev = from_settings(settings, warn=logger.warning, avoid=avoid)
         result = N.build_edges(store, jev, cursor, settings.edges,
-                               on_progress=on_progress, should_stop=should_stop)
+                               on_progress=on_progress, should_stop=should_stop, plan=True)
         # A stopped pass must NOT move the cursor: the untouched events would be skipped
         # forever.  Same for the failure cases.  (Re-running a pair is safe — add_edge
         # dedupes — so a stop costs time, never correctness.)

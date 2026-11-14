@@ -51,6 +51,41 @@ EN: dict[str, str] = {
     "{0} 对已判": "{0} pairs judged",
     "落后 {0}": "behind {0}",
     "{0} 对 / {1} 边": "{0} pairs / {1} edges",
+    # ---- 实时进度（待判倒计时） -------------------------------------------
+    "待判": "To judge",
+    "第 {0}/{1} 个事件 · 已判 {2} 对（预计）":
+        "event {0}/{1} · {2} pairs asked (estimated)",
+    "第 {0}/{1} 个事件 · 正在数这一轮还要问多少对…":
+        "event {0}/{1} · counting this pass's pairs…",
+    "正在准备这一轮…": "preparing this pass…",
+    "空闲 · 游标落后 {0} 个事件": "idle · cursor behind {0} events",
+    "暂停中": "paused",
+    "已暂停": "paused",
+    "正在暂停…": "pausing…",
+    # ---- 调度 → 自动运行（此前漏译，test_ui 的字典守卫一直红着） ------------
+    "自动运行": "Automatic runs",
+    "已暂停（不开新的一轮）": "paused (no new round)",
+    "什么时候算": "When",
+    "每 N 分钟检查一次（有新事件才跑）": "on an interval (only when there is new work)",
+    "每天固定时间": "every day at a fixed time",
+    "每周固定一天": "one fixed weekday",
+    "关闭自动运行（只用按钮）": "off (buttons only)",
+    "间隔（秒）": "Interval (seconds)",
+    "时间": "Time",
+    "星期": "Weekday",
+    "保存自动运行设置": "Save schedule",
+    "已暂停：这一轮停下后不再开新的一轮":
+        "Paused: no new round starts once this one stops",
+    "已继续：按调度恢复": "Resumed: the schedule is back in charge",
+    "运行模式无效": "invalid schedule mode",
+    "时间要写成 HH:MM": "time must be HH:MM",
+    "星期要在 0–6": "weekday must be 0–6",
+    "暂停后任何模式都不再开新的一轮：正在跑的那一轮会在当前这一对结束后停下，暂停状态存在数据库里，重启 daemon 也不会自己恢复，直到点「继续判断」。":
+        "Pausing vetoes every mode: the running round stops after the pair in flight, and the "
+        "flag is stored in the database — restarting the daemon will not resume it until you "
+        "press Continue.",
+    "继续判断": "Continue",
+    "暂停全部判断": "Pause all judging",
     # ---- 回合记忆抽取失败（v10） -------------------------------------------
     "回合记忆抽取失败（{0} 次）": "Turn-end extraction failed ({0}×)",
     "这些回合没有写进任何记忆：抽取模型没给出可用的 0–3 条事件，系统不会再用机械摘要兜底。修好模型后点「清除」。":

@@ -796,7 +796,8 @@ def test_status_carries_the_live_counter():
         seen = {}
 
         def fake_run_once(settings, **kwargs):
-            kwargs["on_progress"]({"pairs": 4, "edges": 3, "backend": "win-autothink"})
+            kwargs["on_progress"]({"pairs": 4, "edges": 3, "backend": "win-autothink",
+                                   "event_index": 17, "events_total": 445, "pairs_planned": 3572})
             seen["live"] = dict(daemon._live or {})
             seen["stop"] = kwargs["should_stop"]()
             return {"pairs": 4, "edges": 3, "backend": "win-autothink"}
@@ -811,6 +812,9 @@ def test_status_carries_the_live_counter():
         check_eq(result["backend"], "win-autothink", "the pass result")
         check_eq(seen["live"].get("pairs"), 4, "the counter was readable mid-pass")
         check_eq(seen["live"].get("backend"), "win-autothink", "with the backend in use")
+        check_eq(seen["live"].get("event_index"), 17, "and how far into the backlog it is")
+        check_eq(seen["live"].get("events_total"), 445, "against how many events")
+        check_eq(seen["live"].get("pairs_planned"), 3572, "plus this pass's pair estimate")
         check_eq(seen["stop"], False, "and the stop flag was clear")
         check_eq(daemon._live, None, "cleared when the pass ends")
     finally:

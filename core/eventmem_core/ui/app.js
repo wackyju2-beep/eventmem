@@ -72,13 +72,25 @@ async function refreshHealth() {
   }
 }
 
-$("run-once").onclick = async () => {
-  const btn = $("run-once");
+/* The pause switch: stops the running pass and every future one (persisted in the db) until
+   pressed again. The schedule itself is configured on the 调度 tab. */
+function paintPause(paused) {
+  const btn = $("pause-toggle");
+  if (!btn) return;
+  btn.dataset.paused = paused ? "1" : "0";
+  btn.textContent = paused ? "继续判断" : "暂停全部判断";
+  btn.classList.toggle("danger", !paused);
+  btn.classList.toggle("primary", paused);
+}
+
+$("pause-toggle").onclick = async () => {
+  const btn = $("pause-toggle");
+  const want = btn.dataset.paused !== "1";
   btn.disabled = true;
   try {
-    const r = await api("/api/run-once", {});
-    toast(r.skipped ? "跳过：" + r.skipped : `跑完：${r.pairs} 对，写 ${r.edges} 条边` +
-      (r.backend ? `（${r.backend}）` : ""), "ok");
+    const r = await api("/api/pause", { paused: want });
+    toast(want ? "已暂停：这一轮停下后不再自动开新的一轮" : "已继续：按调度恢复", "ok");
+    paintPause(Boolean(r.paused));
     refresh("overview");
   } catch (e) {
     toast(e.message, "err");
@@ -93,18 +105,64 @@ $("run-once").onclick = async () => {
    the +1 strip instead of lagging up to five seconds behind every answered pair. */
 let overviewDelay = 5000;
 
+/* 数字翻页：只重画变了的位。逗号与没变的位原样留着，视觉上只有那一位翻了一下。 */
+function setFlip(el, value) {
+  if (!el) return;
+  const text = value === null || value === undefined || value === "" ? "—" : String(value);
+  if (el.dataset.flip === text) return;
+  const before = el.dataset.flip || "";
+  el.dataset.flip = text;
+  if (!before) {
+    el.innerHTML = [...text]
+      .map((ch) => `<span class="flip-cell"><span class="to">${esc(ch)}</span></span>`)
+      .join("");
+    return;
+  }
+  const width = Math.max(before.length, text.length);
+  const a = before.padStart(width, " ");
+  const b = text.padStart(width, " ");
+  let html = "";
+  for (let i = 0; i < width; i += 1) {
+    if (b[i] === " ") continue;
+    const changed = a[i] !== b[i] && a[i] !== " ";
+    html += `<span class="flip-cell">${
+      changed ? `<span class="out">${esc(a[i])}</span>` : ""
+    }<span class="to${changed ? " on" : ""}">${esc(b[i])}</span></span>`;
+  }
+  el.innerHTML = html;
+  window.setTimeout(() => {
+    el.querySelectorAll(".flip-cell .out").forEach((node) => node.remove());
+    el.querySelectorAll(".flip-cell .to.on").forEach((node) => node.classList.remove("on"));
+  }, 460);
+}
+
 async function refreshOverview() {
   const [stats, status, config] = await Promise.all([
     api("/api/stats"), api("/api/status"), api("/api/config")]);
   overviewDelay = status.live ? 1500 : 5000;
+  paintPause(Boolean(status.paused));
 
-  $("n-events").textContent = stats.events ?? "—";
+  setFlip($("n-events"), stats.events == null ? null : stats.events.toLocaleString("en-US"));
   $("n-newest").textContent = stats.newest ? "最新 " + when(stats.newest) : "空库";
-  $("n-edges").textContent = stats.edges ?? "—";
+  setFlip($("n-edges"), stats.edges == null ? null : stats.edges.toLocaleString("en-US"));
   $("n-pairs").textContent = (stats.pairs ?? 0) + " 对已判";
+
+  /* 待判 = 本轮开始时算出来的预计对数 − 已问；写边会退休链头，真实数量只会更少。
+     没有 pass 在跑时这块退回游标口径，别让它显示一个假的 0。 */
   const cursor = status.cursor || {};
-  $("n-behind").textContent = cursor.events == null ? "—" : cursor.events;
-  $("n-lag").textContent = cursor.behind == null ? "无游标" : "游标落后 " + dur(cursor.behind);
+  const live = status.live || null;
+  const planned = live && typeof live.pairs_planned === "number" ? live.pairs_planned : null;
+  const left = live && planned !== null ? Math.max(0, planned - (live.pairs || 0)) : null;
+  setFlip($("n-pending"), left == null ? null : left.toLocaleString("en-US"));
+  $("n-pending-sub").textContent = live
+    ? planned === null
+      ? (live.events_total
+          ? `第 ${live.event_index || 0}/${live.events_total} 个事件 · 正在数这一轮还要问多少对…`
+          : "正在准备这一轮…")
+      : `第 ${live.event_index || 0}/${live.events_total} 个事件 · 已判 ${live.pairs} 对（预计）`
+    : cursor.behind == null
+      ? "无游标"
+      : `空闲 · 游标落后 ${cursor.events} 个事件`;
 
   const kinds = stats.kinds || {};
   const total = Object.values(kinds).reduce((a, b) => a + b, 0) || 1;
@@ -547,6 +605,9 @@ async function refreshSchedule() {
   $("f-cross").value = e.cross_top_k ?? 3;
   $("f-crosscos").value = e.cross_cos_min ?? 0.7;
   $("f-poll").value = e.poll_seconds ?? 60;
+  $("f-schedule").value = e.schedule ?? "interval";
+  $("f-schedule-at").value = e.schedule_at ?? "03:30";
+  $("f-schedule-weekday").value = String(e.schedule_weekday ?? 0);
   $("sched-file").textContent = scheduleCfg.file || "（无配置文件）";
   updateCost();
   await refreshBackfillStatus();
@@ -574,7 +635,7 @@ document.querySelectorAll("button[data-preset]").forEach((b) => {
   };
 });
 
-function scheduleKeys() { return ['heads_vec_top_k', 'heads_cos_min', 'margin', 'session_heads_top_k', 'session_recent', 'unclosed_lessons', 'decision_skeleton', 'cross_top_k', 'cross_cos_min', 'poll_seconds', ...SCHEDULE_ACCEPT.slice(1).map(([key]) => key)]; }
+function scheduleKeys() { return ['heads_vec_top_k', 'heads_cos_min', 'margin', 'session_heads_top_k', 'session_recent', 'unclosed_lessons', 'decision_skeleton', 'cross_top_k', 'cross_cos_min', 'poll_seconds', 'schedule', 'schedule_at', 'schedule_weekday', ...SCHEDULE_ACCEPT.slice(1).map(([key]) => key)]; }
 function scheduleEdges() {
   const edges = {
     heads_vec_top_k: +$("f-heads").value,
@@ -587,6 +648,9 @@ function scheduleEdges() {
     cross_top_k: +$("f-cross").value,
     cross_cos_min: +$("f-crosscos").value,
     poll_seconds: +$("f-poll").value,
+    schedule: $("f-schedule").value,
+    schedule_at: $("f-schedule-at").value || "03:30",
+    schedule_weekday: +$("f-schedule-weekday").value,
   };
   for (const [key] of SCHEDULE_ACCEPT.slice(1)) edges[key] = +$('f-' + key).value;
   if ([...scheduleSection.querySelectorAll('input[type=number]')].some((input) => input.value.trim() === '' || !input.validity.valid))

@@ -19,7 +19,7 @@
   </nav>
   <div class="spacer"></div>
   <span class="pill" id="health">连接中…</span>
-  <button class="btn" id="run-once" title="立刻跑一轮连边">跑一轮</button>
+  <button class="btn danger" id="pause-toggle" data-paused="0" title="暂停后不再自动开新一轮，直到点继续">暂停全部判断</button>
 </header>
 
 <main>
@@ -27,12 +27,12 @@
 <!-- ------------------------------------------------------------------ 概览 -->
 <section id="tab-overview" class="on">
   <div class="grid c3" style="margin-bottom:14px">
-    <div class="card"><h2>事件</h2><div class="big" id="n-events">—</div>
+    <div class="card"><h2>事件</h2><div class="big flip" id="n-events">—</div>
       <div class="sub" id="n-newest">—</div></div>
-    <div class="card"><h2>边 / 已判对</h2><div class="big" id="n-edges">—</div>
+    <div class="card"><h2>边 / 已判对</h2><div class="big flip" id="n-edges">—</div>
       <div class="sub" id="n-pairs">—</div></div>
-    <div class="card"><h2>连边落后</h2><div class="big" id="n-behind">—</div>
-      <div class="sub" id="n-lag">—</div></div>
+    <div class="card"><h2>待判</h2><div class="big flip" id="n-pending">—</div>
+      <div class="sub" id="n-pending-sub">—</div></div>
   </div>
 
   <div class="card" id="notice-card" style="display:none;margin-top:14px">
@@ -172,7 +172,21 @@
       <div><label>Tier2 · 决策骨架</label><input id="f-skeleton" type="number" min="0"></div>
       <div><label>Tier3 · 跨项目 top-k</label><input id="f-cross" type="number" min="1"></div>
       <div><label>Tier3 · 余弦下限</label><input id="f-crosscos" type="number" step="0.05" min="0" max="1"></div>
-      <div><label>轮询间隔（秒）</label><input id="f-poll" type="number" min="5"></div>
+      <div><label>自动运行</label>
+        <select id="f-schedule">
+          <option value="interval">每 N 分钟检查</option>
+          <option value="daily">每天固定时间</option>
+          <option value="weekly">每周固定一天</option>
+          <option value="off">关闭（只用按钮）</option>
+        </select></div>
+      <div><label>时间（HH:MM，每天/每周）</label><input id="f-schedule-at" type="time" value="03:30"></div>
+      <div><label>星期（仅每周）</label>
+        <select id="f-schedule-weekday">
+          <option value="0">周一</option><option value="1">周二</option><option value="2">周三</option>
+          <option value="3">周四</option><option value="4">周五</option><option value="5">周六</option>
+          <option value="6">周日</option>
+        </select></div>
+      <div><label>轮询间隔（秒，仅每 N 分钟）</label><input id="f-poll" type="number" min="5"></div>
     </div>
     <div class="row" style="margin-top:12px">
       <button class="btn primary" id="sched-save">保存</button>

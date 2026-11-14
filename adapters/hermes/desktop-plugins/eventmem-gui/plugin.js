@@ -99,6 +99,23 @@ const CSS = `
 .emg-tile .k{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ui-text-tertiary)}
 .emg-tile .v{font-size:23px;line-height:1.3;font-variant-numeric:tabular-nums}
 .emg-tile .s{font-size:11px;color:var(--ui-text-tertiary);margin-top:2px}
+/* 数字翻页：每一位一扇小窗，值变了就由旧数字翻出去、新数字翻进来；千分位逗号不动。
+   新数字先藏起来（backwards 保持 rotateX(90deg)），旧数字翻走的那一下才露出来，
+   所以不需要给 .out 铺不透明底色。 */
+.emg-flip{display:inline-flex;align-items:baseline;font-variant-numeric:tabular-nums}
+.emg-count .emg-flip{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:13px;font-weight:600}
+.emg-flip-cell{position:relative;display:inline-block;min-width:.56em;text-align:center}
+.emg-flip-cell .out{position:absolute;inset:0;transform-origin:50% 100%;
+  animation:emg-flip-out .18s ease-in forwards}
+.emg-flip-cell .to{display:inline-block;backface-visibility:hidden;transform-origin:50% 0;
+  animation:emg-flip-in .2s .09s ease-out backwards}
+@keyframes emg-flip-out{from{transform:rotateX(0);opacity:1}to{transform:rotateX(-92deg);opacity:0}}
+@keyframes emg-flip-in{from{transform:rotateX(92deg);opacity:0}to{transform:rotateX(0);opacity:1}}
+@media (prefers-reduced-motion: reduce){
+  .emg-flip-cell .out{animation:none;opacity:0}
+  .emg-flip-cell .to{animation:none}
+}
 .emg-row{display:flex;align-items:center;gap:8px}
 .emg-row.wrap{flex-wrap:wrap}
 .emg-grow{flex:1;min-width:0}
@@ -385,12 +402,58 @@ function Btn({ children, onClick, primary, danger, disabled, tiny, title }) {
   return jsx('button', { type: 'button', className: classes.join(' '), onClick, disabled, title, children })
 }
 
+/* 数字翻页。只给真正会变的数字用：概览的三块砖，和直播条上的「对 / 边」。
+   位数从右往左比，没变的位不动，变的位让旧数字翻走、新数字翻进来。 */
+function FlipDigits({ value }) {
+  const text = typeof value === 'number' ? value.toLocaleString('en-US') : NI(value)
+  const shown = useRef(text)
+  const [flip, setFlip] = useState(null)
+
+  useEffect(() => {
+    const before = shown.current
+    shown.current = text
+    if (before === text) return undefined
+    const width = Math.max(before.length, text.length)
+    const a = before.padStart(width, ' ')
+    const b = text.padStart(width, ' ')
+    const cells = []
+    for (let i = 0; i < width; i += 1) {
+      if (b[i] === ' ') continue
+      cells.push({ to: b[i], from: a[i] === b[i] ? '' : a[i] === ' ' ? '' : a[i] })
+    }
+    setFlip({ cells, at: Date.now() })
+    const timer = window.setTimeout(() => setFlip(null), 460)
+    return () => window.clearTimeout(timer)
+  }, [text])
+
+  const cells = flip
+    ? flip.cells
+    : [...text].map((ch) => ({ to: ch, from: '' }))
+
+  return jsx('span', {
+    className: 'emg-flip',
+    children: cells.map((cell, index) =>
+      jsxs(
+        'span',
+        {
+          className: 'emg-flip-cell',
+          children: [
+            cell.from ? jsx('span', { className: 'out', children: cell.from }, `o${cell.from}`) : null,
+            jsx('span', { className: 'to', children: cell.to }, `t${cell.to}`)
+          ]
+        },
+        index
+      )
+    )
+  })
+}
+
 function Tile({ k, v, s }) {
   return jsxs('div', {
     className: 'emg-tile',
     children: [
       jsx('div', { className: 'k', children: k }),
-      jsx('div', { className: 'v', children: v }),
+      jsx('div', { className: 'v', children: jsx(FlipDigits, { value: v }) }),
       s ? jsx('div', { className: 's', children: s }) : null
     ]
   })
@@ -427,6 +490,20 @@ function Overview({ ctx }) {
   }, [running])
 
   const cursor = (status && status.cursor) || {}
+  /* 待判 = 本轮预计要问的对数 − 已问。planned 是这一轮开始时只读算出来的（见 nightly.plan），
+     写边会退休链头，真实数量只会更少，所以标「预计」。没有 pass 在跑时这块退回游标口径。 */
+  const live = (status && status.live) || null
+  const planned = live && typeof live.pairs_planned === 'number' ? live.pairs_planned : null
+  const pendingLeft = live ? (planned === null ? null : Math.max(0, planned - (live.pairs || 0))) : null
+  const walked = live ? live.event_index || 0 : 0
+  const walkTotal = live ? live.events_total || 0 : 0
+  const pendingSub = live
+    ? planned === null
+      ? (walkTotal ? fmt('第 {0}/{1} 个事件 · 正在数这一轮还要问多少对…', walked, walkTotal) : t('正在准备这一轮…'))
+      : fmt('第 {0}/{1} 个事件 · 已判 {2} 对（预计）', walked, walkTotal, NI(live.pairs))
+    : cursor.behind == null
+      ? t('无游标')
+      : fmt('空闲 · 游标落后 {0} 个事件', NI(cursor.events))
   const kinds = (stats && stats.kinds) || {}
   const kindRows = Object.entries(kinds)
   const kindTotal = kindRows.reduce((sum, [, n]) => sum + n, 0) || 1
@@ -473,9 +550,9 @@ function Overview({ ctx }) {
       jsxs('div', {
         className: 'emg-tiles',
         children: [
-          jsx(Tile, { k: t('事件'), v: num(stats && stats.events), s: stats && stats.newest ? fmt('最新 {0}', when(stats.newest)) : t('空库') }),
-          jsx(Tile, { k: t('边 / 已判对'), v: num(stats && stats.edges), s: fmt('{0} 对已判', NI(stats && stats.pairs)) }),
-          jsx(Tile, { k: t('连边落后'), v: num(cursor.events), s: cursor.behind == null ? t('无游标') : fmt('落后 {0}', dur(cursor.behind)) })
+          jsx(Tile, { k: t('事件'), v: stats ? stats.events : null, s: stats && stats.newest ? fmt('最新 {0}', when(stats.newest)) : t('空库') }),
+          jsx(Tile, { k: t('边 / 已判对'), v: stats ? stats.edges : null, s: fmt('{0} 对已判', NI(stats && stats.pairs)) }),
+          jsx(Tile, { k: t('待判'), v: pendingLeft, s: pendingSub })
         ]
       }),
       error ? jsx(Note, { text: error, kind: 'err' }) : null,
@@ -1157,8 +1234,7 @@ const FIELDS = [
   ['unclosed_lessons', t('Tier2 · 未闭环教训'), 1],
   ['decision_skeleton', t('Tier2 · 决策骨架'), 1],
   ['cross_top_k', t('Tier3 · 跨项目 top-k'), 1],
-  ['cross_cos_min', t('Tier3 · 余弦下限'), 0.05],
-  ['poll_seconds', t('轮询间隔（秒）'), 1]
+  ['cross_cos_min', t('Tier3 · 余弦下限'), 0.05]
 ]
 
 const ACCEPT_FIELDS = [
@@ -1181,8 +1257,16 @@ const DEFAULTS = {
   decision_skeleton: 5,
   cross_top_k: 3,
   cross_cos_min: 0.7,
-  poll_seconds: 60
+  poll_seconds: 60,
+  schedule: 'interval',
+  schedule_at: '03:30',
+  schedule_weekday: 0
 }
+
+/* String-valued schedule fields; everything else in DEFAULTS is a number. */
+const TEXT_KEYS = ['schedule', 'schedule_at']
+const MODES = ['interval', 'daily', 'weekly', 'off']
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 
 const fillText = (translate, text, ...args) => translate(text).replace(/\{(\d+)\}/g, (m, i) => args[+i] ?? m);
@@ -1202,6 +1286,9 @@ function progressText(p, tr) {
 
 function Schedule({ ctx, notify }) {
   const config = useFetch(ctx, '/api/config')
+  const status = useFetch(ctx, '/api/status', 5000)
+  const paused = Boolean(status.data && status.data.paused)
+  const [pauseBusy, setPauseBusy] = useState(false)
   const [form, setForm] = useState({ ...DEFAULTS })
   const [busy, setBusy] = useState(false)
   const [previews, setPreviews] = useState({})
@@ -1246,17 +1333,34 @@ function Schedule({ ctx, notify }) {
 
   const preset = (values) => { setForm((old) => ({ ...old, ...values })); setPreviews({}) }
   const edit = (key, value) => { setForm((old) => ({ ...old, [key]: value })); setPreviews({}) }
+  const togglePause = async () => {
+    setPauseBusy(true)
+    try {
+      const want = !paused
+      await ctx.rest('/api/pause', { method: 'POST', body: { paused: want } })
+      notify(want ? t('已暂停：这一轮停下后不再开新的一轮') : t('已继续：按调度恢复'), 'ok')
+      status.reload()
+    } catch (error) {
+      notify(msg(error), 'err')
+    } finally {
+      setPauseBusy(false)
+    }
+  }
   const edgeValues = (source = form) => {
     const edges = {}
     for (const key of Object.keys(DEFAULTS)) {
+      if (TEXT_KEYS.includes(key)) { edges[key] = String(source[key] ?? DEFAULTS[key]); continue }
       const value = Number(source[key])
       if (String(source[key]).trim() === '' || !Number.isFinite(value) || value < 0 ||
           (ACCEPT_FIELDS.some(([name]) => name === key) && value > 1)) throw new Error(t('请输入有效数值（置信度与 margin 为 0–1）'))
       edges[key] = value
     }
+    if (!MODES.includes(edges.schedule)) throw new Error(t('运行模式无效'))
+    if (!/^\d{1,2}:\d{2}$/.test(edges.schedule_at)) throw new Error(t('时间要写成 HH:MM'))
+    if (!(edges.schedule_weekday >= 0 && edges.schedule_weekday <= 6)) throw new Error(t('星期要在 0–6'))
     return edges
   }
-  const candidateEdges = (edges) => Object.fromEntries(Object.entries(edges).filter(([key]) => !ACCEPT_FIELDS.some(([name]) => name === key) && key !== 'poll_seconds'))
+  const candidateEdges = (edges) => Object.fromEntries(Object.entries(edges).filter(([key]) => !ACCEPT_FIELDS.some(([name]) => name === key) && !['poll_seconds', 'schedule', 'schedule_at', 'schedule_weekday'].includes(key)))
   const acceptanceEdges = (edges) => Object.fromEntries(ACCEPT_FIELDS.map(([key]) => [key, edges[key]]))
   const preview = async (kind) => {
     setBusy(true)
@@ -1347,6 +1451,56 @@ function Schedule({ ctx, notify }) {
 
   return jsxs('div', { className: 'emg-page',
     children: [
+      jsx(Card, {
+        title: t('自动运行'),
+        right: jsx('span', { className: 'emg-sub', children: paused ? t('已暂停（不开新的一轮）') : t('运行中') }),
+        children: jsxs('div', {
+          children: [
+            jsx('div', { className: 'emg-grid c3', children: [
+              jsxs('label', { children: [
+                jsx('span', { className: 'emg-label', children: t('什么时候算') }),
+                jsx('select', {
+                  className: 'emg-in',
+                  value: form.schedule,
+                  onChange: (event) => edit('schedule', event.target.value),
+                  children: [
+                    jsx('option', { value: 'interval', children: t('每 N 分钟检查一次（有新事件才跑）') }, 'interval'),
+                    jsx('option', { value: 'daily', children: t('每天固定时间') }, 'daily'),
+                    jsx('option', { value: 'weekly', children: t('每周固定一天') }, 'weekly'),
+                    jsx('option', { value: 'off', children: t('关闭自动运行（只用按钮）') }, 'off')
+                  ]
+                })
+              ] }, 'mode'),
+              form.schedule === 'interval'
+                ? jsxs('label', { children: [
+                    jsx('span', { className: 'emg-label', children: t('间隔（秒）') }),
+                    jsx('input', { className: 'emg-in', type: 'number', min: 5, value: form.poll_seconds, onChange: (event) => edit('poll_seconds', event.target.value) })
+                  ] }, 'poll')
+                : jsxs('label', { children: [
+                    jsx('span', { className: 'emg-label', children: t('时间') }),
+                    jsx('input', { className: 'emg-in', type: 'time', value: form.schedule_at, onChange: (event) => edit('schedule_at', event.target.value) })
+                  ] }, 'at'),
+              form.schedule === 'weekly'
+                ? jsxs('label', { children: [
+                    jsx('span', { className: 'emg-label', children: t('星期') }),
+                    jsx('select', {
+                      className: 'emg-in',
+                      value: String(form.schedule_weekday),
+                      onChange: (event) => edit('schedule_weekday', event.target.value),
+                      children: WEEKDAYS.map((label, index) => jsx('option', { value: String(index), children: t(label) }, label))
+                    })
+                  ] }, 'wd')
+                : null
+            ]}),
+            jsx('div', { className: 'emg-sub', children: t('暂停后任何模式都不再开新的一轮：正在跑的那一轮会在当前这一对结束后停下，暂停状态存在数据库里，重启 daemon 也不会自己恢复，直到点「继续判断」。') }),
+            jsxs('div', { className: 'emg-row', style: { marginTop: 12 }, children: [
+              jsx(Btn, { primary: true, disabled: busy, onClick: save, children: t('保存自动运行设置') }),
+              jsx(Btn, { danger: !paused, disabled: pauseBusy, onClick: togglePause, children: paused ? t('继续判断') : t('暂停全部判断') })
+            ]})
+          ]
+        })
+      }),
+
       jsx(Card, {
         title: t('预设（每轮问多少对）'),
         children: jsxs('div', {
@@ -1540,7 +1694,7 @@ function LiveBar({ ctx, notify }) {
   const status = useFetch(ctx, '/api/status', 1500)
   const live = (status.data && status.data.live) || null
   const busy = Boolean(live) || Boolean(status.data && status.data.busy)
-  const stopping = Boolean(status.data && status.data.stopping)
+  const paused = Boolean(status.data && status.data.paused)
   const pairs = live ? live.pairs : 0
   const edges = live ? live.edges : 0
   const previous = useRef(null)
@@ -1572,16 +1726,21 @@ function LiveBar({ ctx, notify }) {
     }
   }
 
+  /* 暂停/继续只有一个入口，在「调度 → 自动运行」里；这条直播条只报状态和当前后端。 */
   return jsxs('div', {
     className: `emg-live${busy ? ' on' : ''}`,
     children: [
       jsx('span', { className: `emg-dot${busy ? ' on' : ''}` }),
-      jsx('span', { className: 'emg-sub', children: busy ? t('正在使用') : t('空闲') }),
+      jsx('span', {
+        className: 'emg-sub',
+        children: paused ? (busy ? t('正在暂停…') : t('已暂停')) : busy ? t('正在使用') : t('空闲')
+      }),
       jsx('span', {
         className: 'emg-live-backend',
         children: (live && live.backend) || (last && last.backend) || '—'
       }),
       active ? jsx('span', { className: 'emg-tag', children: active.kind }) : null,
+      paused ? jsx('span', { className: 'emg-tag bad', children: t('暂停中') }) : null,
       jsx('span', { className: 'emg-grow' }),
       busy
         ? jsxs('div', {
@@ -1589,11 +1748,11 @@ function LiveBar({ ctx, notify }) {
             children: [
               jsx('span', {
                 className: 'emg-count',
-                children: jsxs('span', { children: [jsx('b', { children: pairs }), ` ${t('对')}`] })
+                children: jsxs('span', { children: [jsx(FlipDigits, { value: pairs }), ` ${t('对')}`] })
               }),
               jsx('span', {
                 className: 'emg-count',
-                children: jsxs('span', { children: [jsx('b', { children: edges }), ` ${t('边')}`] })
+                children: jsxs('span', { children: [jsx(FlipDigits, { value: edges }), ` ${t('边')}`] })
               }),
               flash ? jsx('span', { className: 'emg-plus', key: flash.at, children: `+${flash.n}` }) : null,
               jsx('span', { className: 'emg-sub', children: dur(elapsed) })
@@ -1605,7 +1764,6 @@ function LiveBar({ ctx, notify }) {
               ? fmt('上次 {0} · {1} · {2} 对 / {3} 边', last.backend || '—', when(last.ts), NI(last.pairs), NI(last.edges))
               : t('还没跑过')
           }),
-      jsx(Btn, { danger: true, disabled: !busy, onClick: () => post('/api/stop', '已请求停止：本轮做完手上这一对就停'), children: stopping ? t('停止中…') : t('停止') }),
       jsx(Btn, { primary: true, onClick: () => post('/api/switch', '已请求切换：本轮停下后立刻重跑，重新探活链路'), children: t('切换并重跑') })
     ]
   })
@@ -1698,8 +1856,7 @@ function Console({ ctx }) {
           jsx('span', {
             className: `emg-pill ${healthy ? 'ok' : 'bad'}`,
             children: healthy ? `ok · schema ${NI(health.data.schema)} · pid ${NI(health.data.pid)}` : t('daemon 不可达')
-          }),
-          jsx(Btn, { primary: true, disabled: busy, onClick: runOnce, children: busy ? t('跑着…') : t('跑一轮') })
+          })
         ]
       }),
       jsx(LiveBar, { ctx, notify }),

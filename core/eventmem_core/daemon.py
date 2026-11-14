@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import datetime
 import json
 import logging
 import math
@@ -128,6 +129,14 @@ class Daemon:
         self._job: dict[str, Any] = {"state": "idle", "phase": "", "done": 0, "total": 0,
                                      "error": "", "result": None, "started": 0, "finished": 0}
         self._job_thread: Optional[threading.Thread] = None
+        #: When the last pass finished (0 = never).  The interval/daily/weekly schedule below
+        #: compares this against the current time instead of sleeping a fixed amount, so a
+        #: long pass never stacks a second one on top of itself.
+        self._last_pass_end = 0.0
+        #: Operator pause.  Distinct from ``_abort`` (stop *this* pass): while paused no pass
+        #: starts at all, however the schedule is set, until the button is pressed again.
+        #: Persisted in the database so a daemon restart does not restart the work.
+        self._paused = self._read_paused()
 
     # ------------------------------------------------------------------ packs
 
@@ -183,14 +192,20 @@ class Daemon:
             return {"skipped": "busy"}
         self._abort.clear()
         started = time.time()
-        self._live = {"backend": "", "pairs": 0, "edges": 0, "since": started, "updated": started}
+        self._live = {"backend": "", "pairs": 0, "edges": 0, "since": started, "updated": started,
+                      "event_index": 0, "events_total": 0, "pairs_planned": None}
 
         def progress(state: dict[str, Any]) -> None:
             # Runs on the pass thread, between pairs; the UI reads it through /api/status.
+            planned = state.get("pairs_planned")
             self._live = {
                 "backend": str(state.get("backend") or ""),
                 "pairs": int(state.get("pairs") or 0),
                 "edges": int(state.get("edges") or 0),
+                # 实时进度：走到第几个事件 / 一共几个；待判 = planned - pairs（planned 是估算）
+                "event_index": int(state.get("event_index") or 0),
+                "events_total": int(state.get("events_total") or 0),
+                "pairs_planned": int(planned) if planned is not None else None,
                 "since": started,
                 "updated": time.time(),
             }
@@ -205,6 +220,7 @@ class Daemon:
             result = {"skipped": "error", "error": f"{type(exc).__name__}: {exc}"}
         finally:
             self._live = None
+            self._last_pass_end = time.time()
             self.release()          # 一轮跑完就把 GPU 让回去（只停这一轮自己拉起的 pack）
             self._pass_lock.release()
         backend = str(result.get("backend") or "")
@@ -220,21 +236,109 @@ class Daemon:
         return result
 
     def loop(self, poll: Optional[float] = None) -> None:
+        """Run passes on the configured schedule until the daemon stops.
+
+        ``edges.schedule`` picks the trigger — ``interval`` (every ``poll_seconds``),
+        ``daily`` / ``weekly`` (once at ``schedule_at``) or ``off`` (button only) — and the
+        pause flag vetoes all of them.  Re-read every round so the GUI can change it live.
+        """
         while not self._stop.is_set():
-            # Re-read every round: the GUI can change poll_seconds while this loop runs.
-            interval = float(poll) if poll and poll > 0 else float(self.settings.edges.poll_seconds)
             self._wake.clear()
-            try:
-                result = self.run_pass()
-                if result.get("skipped") not in ("idle", "busy"):
-                    _log.info("eventmem daemon: %s", result)
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("eventmem daemon: pass raised (%s)", exc)
-            # Wake on a switch request or on shutdown; otherwise sit out the interval.
-            end = time.time() + max(5.0, interval)
+            if self._due(poll):
+                try:
+                    result = self.run_pass()
+                    if result.get("skipped") not in ("idle", "busy"):
+                        _log.info("eventmem daemon: %s", result)
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("eventmem daemon: pass raised (%s)", exc)
+            # Wake on a switch/pause request or on shutdown; otherwise sit out the interval.
+            end = time.time() + self._check_every(poll)
             while not self._stop.is_set() and not self._wake.is_set() and time.time() < end:
                 self._stop.wait(min(0.5, max(0.05, end - time.time())))
             self._wake.clear()
+
+    # -------------------------------------------------------------- scheduling
+
+    def _schedule_mode(self) -> str:
+        mode = str(getattr(self.settings.edges, "schedule", "interval") or "interval")
+        return mode if mode in ("interval", "daily", "weekly", "off") else "interval"
+
+    def _today_target(self) -> Optional[float]:
+        """Today's ``schedule_at`` as a timestamp; ``None`` on a day the weekly rule skips."""
+        raw = str(getattr(self.settings.edges, "schedule_at", "03:30") or "03:30")
+        try:
+            hh, mm = [int(part) for part in raw.split(":", 1)]
+        except (TypeError, ValueError):
+            return None
+        now = datetime.datetime.now()
+        if self._schedule_mode() == "weekly":
+            want = int(getattr(self.settings.edges, "schedule_weekday", 0) or 0) % 7
+            if now.weekday() != want:
+                return None
+        try:
+            return datetime.datetime(now.year, now.month, now.day, hh, mm).timestamp()
+        except ValueError:
+            return None
+
+    def _due(self, poll: Optional[float] = None) -> bool:
+        """True when a pass should start now."""
+        if self._paused:
+            return False
+        mode = self._schedule_mode()
+        if mode == "off":
+            return False
+        if mode == "interval":
+            interval = float(poll) if poll and poll > 0 else float(self.settings.edges.poll_seconds)
+            return (time.time() - self._last_pass_end) >= max(1.0, interval)
+        target = self._today_target()
+        # One pass per slot: the last pass must have finished before the slot opened.
+        return target is not None and self._last_pass_end < target <= time.time()
+
+    def _check_every(self, poll: Optional[float] = None) -> float:
+        """How long the loop may sleep before it looks at the clock again."""
+        if self._schedule_mode() != "interval":
+            return 30.0
+        interval = float(poll) if poll and poll > 0 else float(self.settings.edges.poll_seconds)
+        return min(max(1.0, interval), 60.0)
+
+    def _read_paused(self) -> bool:
+        path = self.settings.db_path
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            with Store(path) as store:
+                return str(store.get_meta("schedule_paused") or "") == "1"
+        except Exception:  # noqa: BLE001 - a read failure must not stop the daemon
+            return False
+
+    def set_paused(self, paused: bool) -> bool:
+        """Turn the operator pause on/off; persisted so a restart keeps the choice."""
+        self._paused = bool(paused)
+        if self._paused:
+            # Pause means pause: stop the pass that is running too, not just future ones.
+            self._abort.set()
+        path = self.settings.db_path
+        if path and os.path.exists(path):
+            try:
+                with Store(path) as store:
+                    store.set_meta("schedule_paused", "1" if self._paused else "0")
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("eventmem daemon: could not persist the pause flag (%s)", exc)
+        if not self._paused:
+            self._wake.set()        # resume = look at the schedule now, not a minute later
+        _log.info("eventmem daemon: %s", "paused" if self._paused else "resumed")
+        return self._paused
+
+    def _schedule_view(self) -> dict[str, Any]:
+        mode = self._schedule_mode()
+        return {
+            "mode": mode,
+            "at": str(getattr(self.settings.edges, "schedule_at", "03:30") or "03:30"),
+            "weekday": int(getattr(self.settings.edges, "schedule_weekday", 0) or 0),
+            "poll_seconds": float(self.settings.edges.poll_seconds),
+            "paused": self._paused,
+            "last_pass": self._last_pass_end or None,
+        }
 
     # ------------------------------------------------------------------ views
 
@@ -247,6 +351,7 @@ class Daemon:
             "uptime": round(time.time() - self.started, 1),
             "packs_dir": self.packs_root,
             "backends": [p.name for p in self.packs()],
+            "paused": self._paused,
         }
 
     def backend_status(self, pack: Pack) -> dict[str, Any]:
@@ -281,6 +386,8 @@ class Daemon:
         body["backfill"] = dict(self._backfill)
         body["busy"] = self._pass_lock.locked()
         body["stopping"] = self._abort.is_set()
+        body["paused"] = self._paused
+        body["schedule"] = self._schedule_view()
         body["down"] = {name: round(max(0.0, COOLDOWN - (time.time() - when)), 1)
                         for name, when in self._down.items()
                         if time.time() - when < COOLDOWN}
@@ -425,7 +532,8 @@ class Daemon:
                   'session_recent', 'unclosed_lessons', 'decision_skeleton'}
         cosines = {'heads_cos_min', 'cross_cos_min'}
         ignored = {'margin', 'min_conf_change', 'min_conf_negate', 'min_conf_repeat',
-                   'min_conf_because', 'min_conf_refine', 'poll_seconds'}
+                   'min_conf_because', 'min_conf_refine', 'poll_seconds',
+                   'schedule', 'schedule_at', 'schedule_weekday'}
         if set(values) - counts - cosines - ignored - {'cross_kinds'}:
             raise ValueError('unknown backfill edge field')
         for key, value in values.items():
@@ -840,10 +948,17 @@ class Daemon:
             result = self.run_pass()
             return (409 if result.get("skipped") == "busy" else 200), result
         if method == "POST" and tail == ["stop"]:
-            # Graceful: the pair in flight finishes, the cursor stays put.
+            # Graceful: the pair in flight finishes, the cursor stays put.  The schedule is
+            # untouched, so the next tick starts a pass again — use /api/pause for that.
             running = self._pass_lock.locked()
             self._abort.set()
             return 200, {"ok": True, "stopping": running}
+        if method == "POST" and tail == ["pause"]:
+            # The operator switch: pause stops the running pass *and* every future one until
+            # resume, whatever the schedule says.  Omitted body = pause.
+            want = body.get("paused") if isinstance(body, dict) else None
+            paused = self.set_paused(True if want is None else bool(want))
+            return 200, {"ok": True, "paused": paused, "schedule": self._schedule_view()}
         if method == "POST" and tail == ["switch"]:
             # Stop the current pass *and* cut the poll short: the next pass probes the chain
             # from the top, so a backend that just came up (LM Studio finished loading) wins
@@ -857,6 +972,8 @@ class Daemon:
             self._abort.set()
             self._down.clear()
             self._wake.set()
+            if self._paused:
+                self.set_paused(False)   # "switch and rerun" means the operator wants work
             return 200, {"ok": True, "stopping": running}
         if len(tail) == 3 and tail[0] == "packs" and method == "POST":
             name, action = tail[1], tail[2]

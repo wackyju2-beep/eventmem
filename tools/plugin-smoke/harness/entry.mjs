@@ -84,9 +84,15 @@ const ctx = {
     }
     if (path === '/api/status') {
       // live=1 means "a pass is running right now": the strip ticks and the overview is
-      // supposed to tighten its poll to the same tempo.
+      // supposed to tighten its poll to the same tempo.  ``pairs_planned`` is the pass-start
+      // estimate the console counts down from, so the 待判 tile must fall as ``pairs`` grows.
+      const done = Math.round((pairs - 3254) / 3)
       return Promise.resolve(live
-        ? { ...STATUS, busY: true, busy: true, live: { backend: 'startlux', pairs: Math.round((pairs - 3254) / 3), edges: edges - 2381, since: Date.now() / 1000 - 42 } }
+        ? { ...STATUS, busY: true, busy: true,
+            live: { backend: 'startlux', pairs: done, edges: edges - 2381,
+                    since: Date.now() / 1000 - 42,
+                    event_index: Math.min(445, 72 + done * 2), events_total: 445,
+                    pairs_planned: 3572 } }
         : { ...STATUS })
     }
     if (path === '/api/config' && opts && opts.method === 'POST') {

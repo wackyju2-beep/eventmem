@@ -1082,6 +1082,26 @@ def test_progress_reports_the_backend_in_use():
     check("progress: backend named", ticks and ticks[-1]["backend"] == "win-autothink", repr(ticks[-1:]))
 
 
+def test_the_plan_is_published_before_the_first_pair():
+    """概览那块「待判」倒计时的分母：pass 一开始只读算一遍，不调模型、不写库。
+
+    同一张图不变时它必须**正好**等于这一轮问的对数；写边会退休链头，真实值只会更少，
+    所以面板上标的是「预计」。这里用一个永远答「都不是」的模型把图冻住来做等号。
+    """
+    store = _three_events()
+    ticks: list[dict] = []
+    jev = FakeJev(default=0.0, none_values={"axis": 0.97, "detail": 0.97})
+    res = build_edges(store, jev, T - 1, on_progress=ticks.append, plan=True)
+    head = next((tick for tick in ticks if tick.get("pairs_planned") is not None), {})
+    check("plan: 计划在问第一对之前就发出", head.get("pairs") == 0 and head.get("pairs_planned") is not None,
+          repr(ticks[:2]))
+    check("plan: 报这一轮要走几个事件", ticks and ticks[0].get("events_total") == 3, repr(ticks[:1]))
+    check("plan: 与真正问掉的对数相等（图没变）", head.get("pairs_planned") == res["pairs"],
+          f"{head.get('pairs_planned')} vs {res['pairs']}")
+    check("plan: 这一轮没写边", res["edges"] == 0, repr(res))
+    check("progress: 最后一条带走了事件位置", ticks[-1].get("event_index") == 3, repr(ticks[-1]))
+
+
 def test_a_broken_progress_hook_costs_nothing():
     store = _three_events()
 
@@ -1158,6 +1178,7 @@ TESTS = [
     ("jev probability helper", test_jev_probability_helper),
     ("progress per pair", test_progress_hook_fires_once_per_answered_pair),
     ("progress backend", test_progress_reports_the_backend_in_use),
+    ("pass plan", test_the_plan_is_published_before_the_first_pair),
     ("progress hook broken", test_a_broken_progress_hook_costs_nothing),
     ("stop before first pair", test_a_stop_before_the_first_pair_asks_nothing),
     ("stop after one pair", test_a_stop_after_one_pair_keeps_that_pair),

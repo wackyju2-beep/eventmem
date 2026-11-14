@@ -194,7 +194,8 @@ def _canonical_answer(answer: object) -> object:
 
 def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None, *,
                 on_progress: Optional[Callable[[dict], None]] = None,
-                should_stop: Optional[Callable[[], bool]] = None) -> dict:
+                should_stop: Optional[Callable[[], bool]] = None,
+                plan: bool = False) -> dict:
     """Build relation edges for events newer than ``since_ts``.
 
     Returns ``{"pairs": n, "edges": m, "skipped": reason}`` where ``pairs`` is
@@ -206,6 +207,11 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None,
     ``should_stop`` is asked before each one: a stop is therefore graceful — the pair in
     flight finishes, the cursor stays put, and the next pass skips completed SQLite pairs.
     Any model or persistence failure returns ``jev-error`` to retain the cursor for retry.
+
+    ``plan`` runs the candidate selection once over the whole backlog **before** asking
+    anything (no model calls, read-only) so the console can show how many pairs this pass is
+    going to ask — the denominator for a live "still to judge" countdown.  It is an estimate:
+    edges written during the pass retire chain heads, so the real pass asks *fewer*.
     """
     try:
         if not jev.available():
@@ -214,7 +220,7 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None,
         return {"pairs": 0, "edges": 0, "skipped": "jev-unavailable"}
 
     return _Nightly(store, jev, policy, on_progress=on_progress,
-                    should_stop=should_stop).run(since_ts)
+                    should_stop=should_stop, plan=plan).run(since_ts)
 
 
 # --------------------------------------------------------------------------- #
@@ -225,12 +231,14 @@ def build_edges(store, jev, since_ts: float, policy: "EdgePolicy | None" = None,
 class _Nightly:
     def __init__(self, store, jev, policy: "EdgePolicy | None" = None, *,
                  on_progress: Optional[Callable[[dict], None]] = None,
-                 should_stop: Optional[Callable[[], bool]] = None):
+                 should_stop: Optional[Callable[[], bool]] = None,
+                 plan: bool = False):
         self.store = store
         self.jev = jev
         self.pol = policy or _POLICY
         self.on_progress = on_progress
         self.should_stop = should_stop
+        self.want_plan = plan
 
         self.pairs = 0
         self.edges = 0
@@ -239,6 +247,10 @@ class _Nightly:
         self._had_failure = False
         self._aborted = False
         self._stopped = False
+        # 进度（概览条与实时待判）：第几个事件 / 一共几个 / 本轮预计要问多少对
+        self._event_index = 0
+        self._events_total = 0
+        self._plan_total: Optional[int] = None
 
         self._events: dict[int, dict] | None = None
         self._vecs: dict[int, tuple[float, ...]] | None = None
@@ -261,9 +273,20 @@ class _Nightly:
             return {"pairs": 0, "edges": 0, "skipped": "no-new-events"}
 
         new.sort(key=lambda ev: (_ts(ev), _id(ev)))
-        for ev in new:
+        self._events_total = len(new)
+        if self.want_plan:
+            self._tick()          # 先报「这一轮有多少事件」，待判数量还在算
+            # 一次只读的候选选举，只为算出「这一轮还要问多少对」；不写库、不调模型。
+            try:
+                self._plan_total = self.plan(new)["pairs"]
+            except Exception:  # noqa: BLE001 - a plan is nice to have, never required
+                _log.exception("eventmem nightly: candidate plan failed")
+                self._plan_total = None
+            self._tick()
+        for index, ev in enumerate(new, 1):
             if self._aborted or self._stopped:
                 break
+            self._event_index = index
             try:
                 self._consider(ev)
             except Exception:  # noqa: BLE001 - do not advance past a failed candidate
@@ -290,9 +313,28 @@ class _Nightly:
 
     def _consider(self, ev: dict) -> None:
         """Ask the model about every candidate worth a pair (see the module docstring)."""
+        for other in self._picked(ev):
+            if self._aborted:
+                return
+            if self.should_stop is not None and self.should_stop():
+                self._stopped = True
+                _log.info("eventmem nightly: stop requested, %d pairs done", self.pairs)
+                return
+            previous_pairs = self.pairs
+            self._ask_and_write(other, ev)
+            if self.pairs != previous_pairs:
+                self._tick()
+
+    def _picked(self, ev: dict) -> list[dict]:
+        """The older events this one should be compared against, in the order to ask them.
+
+        Pure selection: no model call, no write.  ``_consider`` asks them; ``plan`` counts the
+        ones whose pair is not archived yet — same code, so the countdown cannot drift from
+        what the pass actually does.
+        """
         eid = _id(ev)
         if eid is None:
-            return
+            return []
         ets = _ts(ev)
         session = _field(ev, "session")
         projects = set(self._project_ids(ev))
@@ -343,17 +385,28 @@ class _Nightly:
         for other in self._rows("active_decisions", sorted(projects), ets, eid, self.pol.decision_skeleton):
             add(other)
 
-        for other in picked.values():
-            if self._aborted:
-                return
-            if self.should_stop is not None and self.should_stop():
-                self._stopped = True
-                _log.info("eventmem nightly: stop requested, %d pairs done", self.pairs)
-                return
-            previous_pairs = self.pairs
-            self._ask_and_write(other, ev)
-            if self.pairs != previous_pairs:
-                self._tick()
+        return list(picked.values())
+
+    def plan(self, events: list[dict]) -> dict:
+        """How many pairs this pass would ask, without asking any (read-only, model-free)."""
+        seen: set[tuple[int, int]] = set()
+        total = 0
+        for ev in events:
+            eid = _id(ev)
+            if eid is None:
+                continue
+            for other in self._picked(ev):
+                oid = _id(other)
+                if oid is None:
+                    continue
+                pair = (eid, oid)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                if self._already_recorded(eid, oid):
+                    continue
+                total += 1
+        return {"pairs": total, "events": len(events)}
 
     # -------------------------------------------------------------- asking
 
@@ -527,6 +580,9 @@ class _Nightly:
                 "pairs": self.pairs,
                 "edges": self.edges,
                 "backend": self._backend_name(),
+                "event_index": self._event_index,
+                "events_total": self._events_total,
+                "pairs_planned": self._plan_total,
             })
         except Exception:  # noqa: BLE001 - a UI hook must never cost a pair
             _log.warning("eventmem nightly: progress hook failed; disabled")
