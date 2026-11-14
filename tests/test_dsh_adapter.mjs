@@ -279,6 +279,7 @@ await test('setup/save writes through the config editor, never the profile file'
   assert.equal(remote.ok, true)
   assert.equal(saved.tunnel, true)
   assert.equal(saved.tunnelHost, 'box')
+  assert.equal(saved.tunnelLocalPort, 9125, 'local tunnel port follows the baseUrl port')
 
   const invalid = await saveSetup(ctx, { mode: 'local', baseUrl: 'not a url' })
   assert.equal(invalid.ok, false)

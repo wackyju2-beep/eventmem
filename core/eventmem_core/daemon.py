@@ -1592,7 +1592,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not token:
             return True
         header = str(self.headers.get("Authorization") or "")
-        return hmac.compare_digest(header, "Bearer " + token)
+        return hmac.compare_digest(header.encode("utf-8", "surrogatepass"),
+                                   ("Bearer " + token).encode("utf-8", "surrogatepass"))
 
     def _same_origin(self) -> bool:
         """Reject a browser POST from another site (CSRF), while allowing non-browser clients.
@@ -1624,7 +1625,8 @@ class _Handler(BaseHTTPRequestHandler):
         authorized = self._authorized()
         # Health is the only unauthenticated route, and an unauthenticated caller gets the
         # identity fields only (no db path, pid, or pack names).
-        if path.startswith("/api/") and path != "/api/health" and not authorized:
+        if (path.startswith("/api/") and not (method == "GET" and path == "/api/health")
+                and not authorized):
             return self._send_json(401, {"error": "missing or invalid API token"})
         try:
             body = self._read_body() if method in ("POST", "PUT") else None

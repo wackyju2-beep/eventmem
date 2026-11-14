@@ -148,6 +148,7 @@ export function normalizeDraft(draft, current = DEFAULTS) {
   if (expectDbId && !/^[0-9a-f]{8,64}$/i.test(expectDbId)) {
     return { ok: false, error: 'expectDbId must be a hexadecimal database id' }
   }
+  const urlPort = Number(parsed.port) || 0
   return {
     ok: true,
     patch: {
@@ -155,6 +156,10 @@ export function normalizeDraft(draft, current = DEFAULTS) {
       baseUrl: baseUrl.replace(/\/+$/, ''),
       tunnel: mode === 'remote',
       tunnelHost: mode === 'remote' ? tunnelHost : '',
+      tunnelLocalPort: mode === 'remote'
+        ? (urlPort || current.tunnelLocalPort || 9123)
+        : (current.tunnelLocalPort || 9123),
+      tunnelRemotePort: current.tunnelRemotePort || 9123,
       expectDbId,
       tokenFile: text(input.tokenFile, ''),
     },
