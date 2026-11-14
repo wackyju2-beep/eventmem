@@ -19,8 +19,12 @@ A persistent, change-aware memory layer shared across AI agents. With the includ
 ```
 When recall finds the old event and the relation exists, it can mark that event as superseded and surface the newer one. Relations may be missed or wrong; see [Limitations.](#anchor-1 "#anchor-1")  
 **Work moves between agents.** For example, DSH records a deployment result in the shared project; later, a Hermes session searching for that project can retrieve it. This is shared *memory*, not shared conversation context. Recall depends on what was actually recorded and on the query; it does not guarantee that every relevant event will be returned.  
-The examples above illustrate intended behavior, not a recorded end-to-end demo. The screenshot below is an **older** graph view, not evidence of current edge density.  
-![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)  
+The examples above illustrate intended behavior, not a recorded end-to-end demo. The two screenshots below come from the same local database: the memory console overview, and the graph view of that data. The figures are only a snapshot.  
+
+![Memory console: 570 events, 224 edges, 55 awaiting a verdict, plus kind and project breakdowns](docs/img/console-overview.png)
+
+![Memory graph: events as nodes, judged relations as edges](docs/img/graph-view.png)
+
 **Quick start**  
 **What is required?**  
 

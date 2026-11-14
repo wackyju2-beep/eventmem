@@ -3,7 +3,7 @@
 [![tests](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[English] · **中文**(README.md "README.md")  
+[English](README.md "README.md") · **中文**  
 
 ***记住「变化」本身.***  
 一套可由多个 AI Agent 共享的持久记忆，不仅记住项目历史，也记录事实如何变化。通过现有的 [DeepSeek Harness（DSH）和 Hermes 适配器，一个 Agent 可以记录决定和结果，另一个 Agent 可以在需要时召回，不必共享各自的会话上下文。前提是两个适配器都配置到同一份 eventmem 数据库。](adapters/dsh/README.md "adapters/dsh/README.md")  
@@ -19,8 +19,12 @@
 ```
 当召回命中旧事件、且关系已经存在时，系统可以标记旧事实已被取代，并带出新事件。关系也可能漏判或误判，见[局限与取舍。](#anchor-1 "#anchor-1")  
 **工作换了 Agent。** 比如 DSH 将一次部署结果记入共享项目，稍后 Hermes 会话查询这个项目时就可以召回它。共享的是*记忆*，不是对话上下文；能否召回取决于实际写入的内容与查询，不保证每次都找到所有相关事件。  
-上面是功能示意，并非已录制的端到端演示。下图是**历史**图谱截图，不代表当前的连边密度。  
-![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)  
+上面是功能示意，并非已录制的端到端演示。下面两张截图取自同一份本地数据库：记忆后台的概览页，以及这份数据的图谱视图，数字只是截图时的快照。  
+
+![记忆后台概览：事件 570 条、224 条边、55 条待判，另有 kind 分布和项目排行](docs/img/console-overview.png)
+
+![记忆图谱：事件为节点，判定出的关系为连线](docs/img/graph-view.png)
+
 **快速开始**  
 **需要安装什么？**  
 
