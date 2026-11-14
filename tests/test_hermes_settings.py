@@ -66,7 +66,25 @@ def test_no_config_means_the_core_defaults() -> None:
         check_eq(got.recall.budget_tokens, 600, "recall default")
         check_eq(got.max_events_per_call, 3, "batch default")
         check_eq(Path(got.db_path), Path(home) / "eventmem" / "events.db", "db lives under the home")
-        check_eq(Path(got.models_root), Path(home) / "localmem" / "models", "model dir")
+        # 模型归 eventmem 自己（不再借 localmem 的目录）；两个目录都不存在时也指向这里，
+        # 这样报错说的是对的地方。
+        check_eq(Path(got.models_root), Path(home) / "eventmem" / "models", "model dir")
+    finally:
+        _rm(home)
+
+
+@case
+def test_models_dir_falls_back_to_the_legacy_localmem_path() -> None:
+    """老部署的模型还在 localmem/models 下：没有新目录时退回旧的，别静默失去向量臂。"""
+    home = home_with("")
+    try:
+        legacy = Path(home) / "localmem" / "models"
+        legacy.mkdir(parents=True)
+        got = S.build(home)
+        check_eq(Path(got.models_root), legacy, "legacy fallback")
+        own = Path(home) / "eventmem" / "models"
+        own.mkdir(parents=True)
+        check_eq(Path(S.build(home).models_root), own, "新目录一出现就优先用它")
     finally:
         _rm(home)
 

@@ -19,5 +19,14 @@ events.db*
 .idea/
 .vscode/
 
+# Node (the dsh console smoke harness installs jsdom + react here)
+node_modules/
+
 # Syncthing conflict copies (the vault has bitten us before)
 *.sync-conflict-*
+
+# Graph bench artifacts: real daemon dumps, screenshots and per-run reports stay local
+tools/dsh-graph-bench/graph.json
+tools/dsh-graph-bench/*.png
+tools/dsh-graph-bench/*-report.json
+tools/dsh-graph-bench/.chrome-profile/

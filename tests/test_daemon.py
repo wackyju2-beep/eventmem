@@ -81,11 +81,19 @@ def fresh_db() -> str:
 
 
 def remove(path: str) -> None:
-    """Clean-up that tolerates a db that was never opened."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+    """Clean-up that tolerates a db that was never opened — and Windows' open handles.
+
+    On Windows the daemon's own ``sqlite3`` handle outlives the test (the store is closed
+    when the instance is collected), so ``unlink`` can fail with WinError 32 for a moment.
+    """
+    for _ in range(5):
+        try:
+            os.unlink(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            time.sleep(0.2)
 
 
 def settings_for(db: str, *, packs_dir: str = "", backends: tuple = (),
@@ -124,8 +132,11 @@ class running_server:
     def port(self) -> int:
         return int(self.server.server_address[1])
 
-    def request(self, path: str, *, method: str = "GET"):
-        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method)
+    def request(self, path: str, *, method: str = "GET", body=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        headers = {} if data is None else {"Content-Type": "application/json"}
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                         data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=5) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -218,6 +229,128 @@ def test_unknown_route_is_404():
         with running_server(daemon) as api:
             check_eq(api.request("/api/nope")[0], 404, "unknown path")
             check_eq(api.request("/api/status", method="POST")[0], 404, "wrong method")
+    finally:
+        remove(db)
+
+
+@case
+def test_data_plane_shares_the_database_over_http():
+    """数据面 = EventMem 的 REST 镜像：另一台机器上的宿主读写同一份库（库文件不动）。"""
+    db = fresh_db()
+    try:
+        daemon = daemon_mod.Daemon(settings_for(db))
+        with running_server(daemon) as api:
+            status, body = api.request("/api/mem/projects")
+            check_eq(status, 200, "空库也要 200")
+            check_eq(body["projects"], [], "还没有项目")
+
+            status, body = api.request("/api/mem/projects", method="POST",
+                                       body={"name": "小主机"})
+            check_eq(status, 200, "建项目")
+            check_eq(body["project"]["name"], "小主机", "项目名")
+
+            status, body = api.request("/api/mem/events", method="POST", body={
+                "kind": "结果", "text": "远端宿主写的第一条", "project": "小主机",
+                "session": "dsh:s1", "agent": "dsh"})
+            check_eq(status, 200, "写事件")
+            check_eq(body["agent"], "dsh", "回来时带上来源")
+            eid = body["id"]
+
+            status, body = api.request(f"/api/mem/events/{eid}")
+            check_eq(status, 200, "读事件")
+            check_eq(body["text"], "远端宿主写的第一条", "正文")
+            check_eq(body["agent"], "dsh", "来源跟着事件走")
+
+            # 同一会话第二次召回只给指针；reset 之后恢复完整块
+            status, first = api.request("/api/mem/recall", method="POST",
+                                        body={"query": "远端宿主", "session": "dsh:s1"})
+            check(first["count"] >= 1, f"第一次召回: {first}")
+            check(first["hint"].startswith("[eventmem]"), f"项目候选单独回: {first}")
+            status, second = api.request("/api/mem/recall", method="POST",
+                                         body={"query": "远端宿主", "session": "dsh:s1"})
+            check("同上文" in second["block"], f"第二次应只给指针: {second}")
+            status, again = api.request("/api/mem/recall", method="POST",
+                                        body={"query": "远端宿主", "session": "dsh:s1",
+                                              "reset": True})
+            check("同上文" not in again["block"], f"reset 后恢复完整块: {again}")
+
+            # 不带 session = 无状态，每次都完整给
+            status, stateless = api.request("/api/mem/recall", method="POST",
+                                            body={"query": "远端宿主"})
+            check_eq(stateless["stateless"], True, "标了无状态")
+
+            status, body = api.request("/api/mem/neighbors", method="POST",
+                                       body={"event_id": eid})
+            check_eq(status, 200, "邻居")
+            check(body["found"], f"邻居块: {body}")
+
+            # 坏输入一律 400/404，不能 500
+            status, body = api.request("/api/mem/events", method="POST",
+                                       body={"kind": "结果", "text": "x",
+                                             "project": "没有这个项目"})
+            check_eq(status, 400, "未知项目 400")
+            check("UnknownProject" in body["error"], body)
+            status, body = api.request("/api/mem/events", method="POST",
+                                       body={"text": "缺 kind"})
+            check_eq(status, 400, "缺字段 400")
+            status, body = api.request("/api/mem/events/9999")
+            check_eq(status, 404, "不存在的事件 404")
+
+            status, body = api.request(f"/api/mem/events/{eid}/forget", method="POST")
+            check_eq(body["removed"], True, "删掉")
+            status, body = api.request(f"/api/mem/events/{eid}")
+            check_eq(status, 404, "删完就查不到")
+    finally:
+        remove(db)
+
+
+@case
+def test_session_project_stickiness_survives_a_restart():
+    """会话粘性必须落库：宿主进程重启后，同一会话的后半段还得回到同一个项目。"""
+    db = fresh_db()
+    try:
+        daemon = daemon_mod.Daemon(settings_for(db))
+        with running_server(daemon) as api:
+            api.request("/api/mem/projects", method="POST", body={"name": "小主机"})
+
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1"})
+            check_eq(status, 200, "没有粘性也要 200")
+            check_eq(body["project"], "", "新会话还没有项目")
+
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1", "project": "小主机"})
+            check_eq(status, 200, "写粘性")
+            check_eq(body["project"], "小主机", "回显写入值")
+
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1"})
+            check_eq(body["project"], "小主机", "读回来还是它")
+
+            # 换一个 daemon 实例（= 宿主/daemon 重启）仍然读得到：数据在表里，不在内存里
+            with Store(db) as store:
+                row = store.get_session_project("dsh:s1")
+                check_eq((row or {}).get("project"), "小主机", "落的是 session_project 表")
+
+            # 别的会话不受影响
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s2"})
+            check_eq(body["project"], "", "别的会话是空的")
+
+            # 清掉：null / "" / unfiled 都算「没有项目」
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1", "project": None})
+            check_eq(body["project"], "", "清掉之后为空")
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1"})
+            check_eq(body["project"], "", "读回来也是空")
+
+            # 坏输入 400
+            status, body = api.request("/api/mem/session/project", method="POST",
+                                       body={"session": "dsh:s1", "project": "没有这个项目"})
+            check_eq(status, 400, "未知项目 400")
+            status, body = api.request("/api/mem/session/project", method="POST", body={})
+            check_eq(status, 400, "缺 session 400")
     finally:
         remove(db)
 

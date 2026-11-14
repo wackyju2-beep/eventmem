@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "eventmem memory",
+    "description": "Shared long-term event memory for this host: one recall block per turn, seven memory tools, a turn-end extractor, and a native memory console (overview / backends / models / schedule / logs / graph) under 插件 in the sidebar — all over the eventmem daemon's /api/mem/* data plane. Writes are tagged agent=dsh with dsh:-prefixed sessions; a dead tunnel degrades to no memory instead of failing the turn.",
+    "detail": "docs/DETAIL.md"
+  }
+}

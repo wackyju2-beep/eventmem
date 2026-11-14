@@ -27,6 +27,7 @@
 | 项目词表与归档规则 | 工具的 JSON schema 与错误文案 |
 | 关系边的判定（margin、候选、tier） | 配置从哪读（`config.yaml` / 环境变量 / 远端） |
 | 夜间补算与游标 | 什么时候跑（systemd / cron / 宿主线程） |
+| `events.agent` 这一列（谁写的） | 声明自己叫什么：`EventMem(settings, agent="hermes")`、会话 id 前缀 |
 | 渲染块的行格式与预算 | 渲染给谁看（模型 / 用户 / 另一个 agent） |
 
 判据很简单：**换一个宿主，这段代码还成立吗？** 成立就在 core。
@@ -40,8 +41,8 @@ settings = apply(CoreSettings(db_path="/path/events.db"), {
     "edges": {"margin": 0.2},
     "recall": {"budget_tokens": 800},
 })
-mem = EventMem(settings)          # 打开库、懒加载编码器
-mem.add_event("结果", "……", project="小主机", session="s1")
+mem = EventMem(settings, agent="hermes")   # 这个实例代表哪个宿主：写进 events.agent
+mem.add_event("结果", "……", project="小主机", session="hermes:s1")
 mem.recall("上次那个盘怎么选的？", state=mem.new_recall_state())
 mem.build_edges(since_ts)          # 一轮连边（需要决策模型）
 mem.close()

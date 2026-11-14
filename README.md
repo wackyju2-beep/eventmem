@@ -159,6 +159,20 @@ mem.recall("which disk did we pick?", state=mem.new_recall_state())
 Hermes is the first adapter; DeepSeek Harness is the next one. The things a new host should not have to rewrite
 are exactly the things in core: the margin, active heads, RRF, the skeleton, the rendering budget.
 
+Two hosts, one database, stays attributable: `EventMem(settings, agent="hermes")` stamps `events.agent` on every
+write, and the adapter prefixes its session ids (`hermes:20261111_…`). A row without an `agent` is simply older
+than the column — nothing guesses a host for it.
+
+The default deployment is **one machine**: one `events.db`, one daemon, any number of host processes reading and
+writing through WAL. Two agents on that machine can share the file as long as only one daemon runs per database
+(the second one refuses to start: `<db>.daemon.lock` is a `flock`). A host that lives on **another** machine
+cannot open that file — a SQLite database must not sit on a network share, where file locking is unreliable — so
+it uses the daemon's data plane instead: `POST /api/mem/events`,
+`POST /api/mem/recall`, `GET /api/mem/projects`, `GET /api/mem/events/<id>` on the same loopback port, reached
+through an SSH tunnel. It is a thin mirror of `EventMem` — validation and rendering only; batching, in-batch links
+and redaction stay in the adapter. The database never leaves the box, and the API has no auth, so it is
+loopback-only by design. Spec: [`docs/api.md`](docs/api.md).
+
 The graph backend is the one deliberate exception to "adapters go through `EventMem`": it reads the same SQLite
 file directly. It needs the whole event table (the provider's recall queries are all top-k), and its two manual
 edits are plain UPDATEs. That keeps FastAPI out of the memory plugin, and the graph never registers a provider.
@@ -255,7 +269,9 @@ it is the same URL on the dashboard's host, with no tunnel to remember. `EVENTME
 proxy's target when the daemon lives somewhere else.
 
 Vector arm (optional): `pip install onnxruntime tokenizers numpy`, then drop a Qwen3-Embedding-0.6B ONNX
-(512-dim, int8) into `~/localmem/models/`. Missing anything just means FTS-only, silently.
+(512-dim, int8: `tokenizer.json` + `model_int8.onnx`) into `<hermes_home>/eventmem/models/` — the model
+belongs to eventmem, not to another plugin's directory. Missing anything just means FTS-only, silently,
+so check `Encoder(...).available()` / the `encoder ready` log line instead of trusting silence.
 
 ## Using it
 

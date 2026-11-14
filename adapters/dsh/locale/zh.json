@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "eventmem 事件记忆",
+    "description": "给本宿主接上共享的长期事件记忆：每回合一次召回注入、七个记忆工具、回合末抽取，全部走 eventmem daemon 的 /api/mem/* 数据面；侧边栏「插件」下面是原生的记忆后台（概览 / 后端 / 模型 / 调度 / 日志 / 图谱）。写入带 agent=dsh、会话带 dsh: 前缀；隧道断了就退化成这一回合没有记忆，不会把回合搞挂。",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 12
 
 # ``PRAGMA`` statements are deliberately absent: journal_mode / foreign_keys are no-ops inside a
 # transaction, and executescript() commits whatever is pending. ensure_schema() sets them first.
@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS events (
   art_path   TEXT,                              -- artifact 的源文件路径（v7）：同一份文件的多次改动靠它连边
   src_msg    INTEGER,
   session    TEXT,
+  agent      TEXT,                              -- 哪个宿主写的（hermes / dsh …），NULL = v11 之前的老事件
   vec        BLOB,                              -- float32 向量，512 维
   edited_ts  REAL                               -- 非 NULL = 人工在可视化界面改过（彩虹高光）
 );
@@ -125,6 +126,16 @@ WHEN NEW.decided_by = 'jev' AND EXISTS (
 BEGIN
   SELECT RAISE(IGNORE);
 END;
+
+-- 被拖动/被拉开的原子位置。格子布局是确定性的，这张表只记住「人把它放到了哪」，
+-- 所以没有它图谱照样能画，有它刷新之后才不会立刻弹回格子（v12）。
+CREATE TABLE IF NOT EXISTS atom_pos (
+  id         INTEGER PRIMARY KEY,
+  x          REAL NOT NULL,
+  y          REAL NOT NULL,
+  z          REAL NOT NULL,
+  updated_ts REAL NOT NULL
+);
 
 -- 回合末抽取失败（v10）。抽取模型调用失败或输出不可解析时**不写记忆**：一段没有结论的
 -- 对话不该变成一条记忆，失败本身才是要让人看见的东西，所以只留一行警告给控制台。
@@ -242,6 +253,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     # 分布形状不同，重算 margin 时必须知道来源；decided_by 仍然只回答「谁算的」。
     if "backend" not in edge_cols:
         conn.execute("ALTER TABLE edges ADD COLUMN backend TEXT NOT NULL DEFAULT ''")
+
+    # v11: 这条事件是哪个宿主写的。两个 agent 共用一个库时，召回/图谱才能回答「这是谁记的」；
+    # NULL = 拆分前的老事件（不猜、不回填——同一个 session 也可以来自任何宿主）。
+    if "agent" not in event_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN agent TEXT")
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

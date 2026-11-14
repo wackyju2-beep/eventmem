@@ -65,6 +65,13 @@ class EdgePolicy:
     #: Resident worker: seconds between polls, and the first-run look-back window
     #: used when the database has no cursor yet.
     poll_seconds: float = 60.0
+    #: When a pass may start: ``interval`` (every ``poll_seconds``), ``daily`` / ``weekly``
+    #: (once at ``schedule_at``), or ``off`` (the Run button is the only trigger).
+    schedule: str = "interval"
+    #: Local wall-clock ``HH:MM`` for the daily and weekly modes.
+    schedule_at: str = "03:30"
+    #: Weekly mode only: 0 = Monday … 6 = Sunday.
+    schedule_weekday: int = 0
     first_run_hours: float = 24.0
 
 
@@ -129,8 +136,8 @@ class CoreSettings:
     language: str = ""
     #: Hard cap on one ``evt_add`` call; the tool schema advertises the same number.
     max_events_per_call: int = 3
-    #: Directory holding the embedding model (the vector arm).  Empty = the legacy
-    #: ``$HERMES_HOME/localmem/models`` (or ``$EVENTMEM_MODELS_ROOT`` when set).
+    #: Directory holding the embedding model (the vector arm).  Empty = ``$EVENTMEM_MODELS_ROOT``
+    #: → ``$HERMES_HOME/eventmem/models`` → legacy ``$HERMES_HOME/localmem/models``.
     models_root: str = ""
     recall: RecallPolicy = field(default_factory=RecallPolicy)
     edges: EdgePolicy = field(default_factory=EdgePolicy)
@@ -217,6 +224,21 @@ def _validate(policy: Any, name: str, warn) -> None:
             return False
         if policy.max_fail_streak < 1:
             warn(f"{name}.max_fail_streak 必须 ≥1；用默认值")
+            return False
+        if policy.schedule not in ('interval', 'daily', 'weekly', 'off'):
+            warn(f"{name}.schedule 必须是 interval/daily/weekly/off；用默认值")
+            return False
+        if policy.schedule in ('daily', 'weekly'):
+            try:
+                hh, mm = [int(part) for part in str(policy.schedule_at).split(':', 1)]
+            except (TypeError, ValueError):
+                warn(f"{name}.schedule_at 必须是 HH:MM；用默认值")
+                return False
+            if not (0 <= hh < 24 and 0 <= mm < 60) or not 0 <= policy.schedule_weekday <= 6:
+                warn(f"{name}.schedule_at 必须是 00:00–23:59、schedule_weekday 在 0–6；用默认值")
+                return False
+        if policy.poll_seconds <= 0:
+            warn(f"{name}.poll_seconds 必须 > 0；用默认值")
             return False
     if isinstance(policy, RecallPolicy):
         if policy.budget_tokens < 100 or policy.skeleton_budget < 100:

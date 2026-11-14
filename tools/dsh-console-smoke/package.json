@@ -1,0 +1,16 @@
+{
+  "name": "dsh-console-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Offline render + proxy smoke tests for adapters/dsh/client.js and lib/console.js",
+  "scripts": {
+    "smoke": "node run.mjs",
+    "proxy": "node proxy.mjs",
+    "all": "node run.mjs && node proxy.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

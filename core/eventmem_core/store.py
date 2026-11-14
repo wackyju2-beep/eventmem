@@ -53,8 +53,12 @@ REL_REPEAT = "重复"
 HEAD_KILL_RELS = (REL_CHANGE, REL_DENY, REL_REPEAT)
 UNFILED = "unfiled"  # §4.3: the one name that means "no project"
 
+#: Sentinel for "leave this column alone" (``None`` is a real value: 未归类).
+_KEEP = object()
+
+
 _EVENT_COLS = ("e.id, e.ts, e.kind, e.text, e.project_id, e.art_id, e.art_path, "
-               "e.src_msg, e.session, e.vec")
+               "e.src_msg, e.session, e.agent, e.vec")
 _EVENT_SELECT = (
     f"SELECT {_EVENT_COLS}, p.name AS project_name "
     "FROM events e LEFT JOIN projects p ON p.id = e.project_id"
@@ -97,6 +101,7 @@ def _event_row(row: sqlite3.Row) -> dict:
         "project": row["project_name"],
         "project_id": row["project_id"],
         "session": row["session"],
+        "agent": row["agent"],
         "art_id": row["art_id"],
         "art_path": row["art_path"],
         "src_msg": row["src_msg"],
@@ -140,7 +145,22 @@ def _as_bytes(vec: Any) -> Optional[bytes]:
     tobytes = getattr(vec, "tobytes", None)  # numpy arrays are accepted without importing numpy
     if callable(tobytes):
         return tobytes()
+    if isinstance(vec, (list, tuple, array.array)):
+        # 编码器可以回 list[float]（依赖实现），向量列要的是 float32 字节。
+        values = array.array("f", [float(x) for x in vec])
+        return values.tobytes()
     raise TypeError(f"vec must be bytes-like, got {type(vec).__name__}")
+
+
+def _json_dict(raw: Any) -> Optional[dict]:
+    """A JSON object column (``probs`` / ``axis_probs``) as a dict; anything else is ``None``."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _fts_terms(q: str, max_terms: int = 24) -> list[str]:
@@ -346,6 +366,7 @@ class Store:
         art_id: Optional[int] = None,
         art_path: Optional[str] = None,
         extra_projects: Optional[list[str]] = None,
+        agent: Optional[str] = None,
         vec: Optional[bytes] = None,
     ) -> int:
         """Append one event. ``project`` must already exist (or be None/``unfiled``)."""
@@ -371,9 +392,10 @@ class Store:
                     extra_ids.append(xid)
 
             cur = self._db.execute(
-                "INSERT INTO events(ts, kind, text, project_id, art_id, art_path, src_msg, session, vec) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
-                (ts, kind, text, pid, art_id, art_path, src_msg, session, _as_bytes(vec)),
+                "INSERT INTO events(ts, kind, text, project_id, art_id, art_path, src_msg, session, agent, vec) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (ts, kind, text, pid, art_id, art_path, src_msg, session,
+                 (agent or "").strip() or None, _as_bytes(vec)),
             )
             eid = int(cur.lastrowid)
             if pid is not None:
@@ -828,14 +850,20 @@ class Store:
         *,
         text: Optional[str] = None,
         kind: Optional[str] = None,
+        project_id: Any = _KEEP,
         edited_ts: Optional[float] = None,
         vec: Any = None,
     ) -> bool:
-        """Edit an event's text/kind and stamp ``edited_ts`` (rainbow highlight in the graph).
+        """Edit an event's text/kind/project and stamp ``edited_ts`` (rainbow highlight in the graph).
 
         The FTS trigger keeps the lexical index in sync.  ``vec`` is optional on purpose: a
         typo fix does not have to evict the event from the vector arm, so the caller decides
         whether to re-encode (the graph's editor always does — its button says so).
+
+        ``project_id`` is a sentinel-guarded column: omit it to leave the project alone, pass
+        ``None`` for 未归类.  Moving the project also moves the ``is_primary`` membership row in
+        the same transaction — candidate selection reads ``event_projects``, and the partial
+        unique index allows exactly one primary row per event.
         """
         sets: list[str] = []
         params: list[Any] = []
@@ -850,6 +878,10 @@ class Store:
                 raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
             sets.append("kind = ?")
             params.append(kind)
+        move_project = project_id is not _KEEP
+        if move_project:
+            sets.append("project_id = ?")
+            params.append(None if project_id is None else int(project_id))
         if not sets:
             return False
         if vec is not None:
@@ -860,6 +892,16 @@ class Store:
         params.append(int(eid))
         with self._lock:
             cur = self._db.execute(f"UPDATE events SET {', '.join(sets)} WHERE id = ?", params)
+            if move_project and cur.rowcount > 0:
+                self._db.execute(
+                    "DELETE FROM event_projects WHERE is_primary = 1 AND event_id = ?", (int(eid),)
+                )
+                if project_id is not None:
+                    self._db.execute(
+                        "INSERT INTO event_projects(event_id, project_id, is_primary) "
+                        "VALUES(?,?,1) ON CONFLICT(event_id, project_id) DO UPDATE SET is_primary = 1",
+                        (int(eid), int(project_id)),
+                    )
             self._db.commit()
         return cur.rowcount > 0
 
@@ -956,6 +998,250 @@ class Store:
         by_id = {int(r["id"]): r["project_id"] for r in rows}
         a, b = by_id.get(src), by_id.get(dst)
         return 1 if (a is not None and b is not None and a != b) else 0
+
+    # ---------------------------------------------------------------- graph (可视化)
+
+    def graph_view(self) -> dict[str, Any]:
+        """Everything the 3D graph draws, in one read.
+
+        The recall queries are all top-k, so the graph is the one caller that needs the whole
+        event and edge tables.  ``pairs`` is capped: only the most recent judgements are worth
+        drawing as grey lines, and a full ``pair_evals`` scan is the payload's biggest term.
+        """
+        with self._lock:
+            events = [
+                {
+                    "id": int(r["id"]),
+                    "ts": float(r["ts"]),
+                    "kind": r["kind"],
+                    "text": r["text"],
+                    "project": r["project"],
+                    "project_id": r["project_id"],
+                    "session": r["session"],
+                    "edited_ts": r["edited_ts"],
+                }
+                for r in self._db.execute(
+                    "SELECT e.id, e.ts, e.kind, e.text, e.project_id, e.session, e.edited_ts, "
+                    "       p.name AS project "
+                    "FROM events e LEFT JOIN projects p ON p.id = e.project_id "
+                    "ORDER BY e.id ASC"
+                )
+            ]
+            known = {e["id"] for e in events}
+            edges = [
+                {
+                    "src": int(r["src"]),
+                    "dst": int(r["dst"]),
+                    "rel": r["rel"],
+                    "conf": float(r["conf"]),
+                    "decided_by": r["decided_by"],
+                    "cross": int(r["cross"]),
+                    "probs": _json_dict(r["probs"]),
+                    "edited_ts": r["edited_ts"],
+                }
+                for r in self._db.execute(
+                    "SELECT src, dst, rel, conf, decided_by, cross, probs, edited_ts "
+                    "FROM edges ORDER BY src ASC, dst ASC"
+                )
+                if int(r["src"]) in known and int(r["dst"]) in known
+            ]
+            pairs = [
+                {
+                    "src": int(r["src"]),
+                    "dst": int(r["dst"]),
+                    "axis_probs": _json_dict(r["axis_probs"]),
+                    "detail_probs": _json_dict(r["detail_probs"]),
+                    "axis_label": r["axis_label"],
+                    "detail_label": r["detail_label"],
+                    "ts": float(r["ts"]),
+                }
+                for r in self._db.execute(
+                    "SELECT src, dst, axis_probs, detail_probs, axis_label, detail_label, ts "
+                    "FROM pair_evals ORDER BY ts DESC LIMIT 4000"
+                )
+                if int(r["src"]) in known and int(r["dst"]) in known
+            ]
+            projects = [
+                {"id": int(r["id"]), "name": r["name"], "status": r["status"]}
+                for r in self._db.execute("SELECT id, name, status FROM projects ORDER BY name")
+            ]
+            sessions = [
+                {
+                    "id": r["session"],
+                    "count": int(r["n"]),
+                    "first": float(r["first_ts"]),
+                    "last": float(r["last_ts"]),
+                }
+                for r in self._db.execute(
+                    "SELECT session, count(*) AS n, min(ts) AS first_ts, max(ts) AS last_ts "
+                    "FROM events WHERE session IS NOT NULL AND session != '' "
+                    "GROUP BY session ORDER BY last_ts DESC"
+                )
+            ]
+            try:
+                positions = [
+                    {"id": int(r["id"]), "x": float(r["x"]), "y": float(r["y"]), "z": float(r["z"])}
+                    for r in self._db.execute("SELECT id, x, y, z FROM atom_pos")
+                    if int(r["id"]) in known
+                ]
+            except sqlite3.Error:
+                # A database opened before ``atom_pos`` landed: no saved positions, still drawable.
+                positions = []
+            vec = self._db.execute(
+                "SELECT count(vec) AS n, max(length(vec)) AS bytes FROM events"
+            ).fetchone()
+        return {
+            "ok": True,
+            "db": self.db_path,
+            "generated_at": time.time(),
+            "events": events,
+            "edges": edges,
+            "pairs": pairs,
+            "positions": positions,
+            "projects": projects,
+            "sessions": sessions,
+            "kinds": list(KINDS),
+            "rels": list(RELS),
+            # 语义筛选的前提：已经有事件向量。空表 / 全 NULL 时前端会把入口标成不可用。
+            "vectors": {"events": int(vec["n"] or 0), "dim": int((vec["bytes"] or 0) // 4)},
+        }
+
+    def refresh_cross(self, ids: Iterable[int]) -> int:
+        """Re-mark ``edges.cross`` for the edges touching ``ids`` — the flag follows the projects.
+
+        Moving an atom into its partner's project has to clear the cross mark, and moving it out
+        has to set it.  The relation itself is untouched: a human edit is never destroyed by a
+        re-mark.
+        """
+        ids = [int(i) for i in ids]
+        if not ids:
+            return 0
+        ph = _placeholders(len(ids))
+        changed = 0
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT e.src AS src, e.dst AS dst, e.cross AS cross, "
+                "       a.project_id AS pa, b.project_id AS pb "
+                "FROM edges e JOIN events a ON a.id = e.src JOIN events b ON b.id = e.dst "
+                f"WHERE e.src IN ({ph}) OR e.dst IN ({ph})",
+                (*ids, *ids),
+            ).fetchall()
+            for row in rows:
+                pa, pb = row["pa"], row["pb"]
+                want = 1 if (pa is not None and pb is not None and pa != pb) else 0
+                if int(row["cross"] or 0) != want:
+                    self._db.execute(
+                        "UPDATE edges SET cross = ? WHERE src = ? AND dst = ?",
+                        (want, int(row["src"]), int(row["dst"])),
+                    )
+                    changed += 1
+            if changed:
+                self._db.commit()
+        return changed
+
+    def mark_reseat(self, ids: Iterable[int]) -> float:
+        """Ask the next link pass to start before the oldest touched event (0 = already covered).
+
+        Candidate selection depends on the projects, so a project edit invalidates the
+        *candidates* of every event from here on — but not the judgments already in
+        ``pair_evals``.  The pass therefore re-selects (cheap) and asks the model only about pairs
+        it has never seen.  Never moves forward: an earlier pending marker wins.
+        """
+        from .nightly import RESEAT_KEY
+
+        ids = [int(i) for i in ids]
+        if not ids:
+            return 0.0
+        ph = _placeholders(len(ids))
+        with self._lock:
+            row = self._db.execute(f"SELECT min(ts) AS ts FROM events WHERE id IN ({ph})", ids).fetchone()
+            stamp = row["ts"] if row is not None else None
+            if stamp is None:
+                return 0.0
+            want = float(stamp) - 1.0
+            current = self._db.execute(
+                "SELECT value FROM meta WHERE key = ?", (RESEAT_KEY,)
+            ).fetchone()
+            try:
+                have = float(current["value"]) if current is not None else 0.0
+            except (TypeError, ValueError):
+                have = 0.0
+            if 0 < have <= want:
+                return have
+            self._db.execute(
+                "INSERT INTO meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (RESEAT_KEY, "%.3f" % want),
+            )
+            self._db.commit()
+        return want
+
+    def save_atom_positions(self, rows: Iterable[Sequence[Any]]) -> int:
+        """Persist dragged positions (``(id, x, y, z)``); the next load starts where they were left."""
+        stamp = time.time()
+        items = [(int(r[0]), float(r[1]), float(r[2]), float(r[3]), stamp) for r in rows]
+        if not items:
+            return 0
+        with self._lock:
+            self._db.executemany(
+                "INSERT INTO atom_pos(id, x, y, z, updated_ts) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET x=excluded.x, y=excluded.y, z=excluded.z, "
+                "updated_ts=excluded.updated_ts",
+                items,
+            )
+            self._db.commit()
+        return len(items)
+
+    def clear_atom_positions(self) -> int:
+        with self._lock:
+            cur = self._db.execute("DELETE FROM atom_pos")
+            self._db.commit()
+        return int(cur.rowcount or 0)
+
+    def semantic_hits(
+        self, qvec: Any, *, top: int = 16, min_score: Optional[float] = None
+    ) -> dict[str, Any]:
+        """Rank events by cosine similarity to one query vector.
+
+        Stored ``events.vec`` are already L2-normalised, so a dot product is the cosine.  Runs
+        without numpy: a few hundred vectors is not worth the import, and the daemon should not
+        grow a hard dependency for one page.
+        """
+        query = _unit_vector(_as_bytes(qvec))
+        if not query:
+            raise ValueError("query vector is empty")
+        dim = len(query)
+        hits: list[tuple[int, float]] = []
+        scanned = skipped = 0
+        for eid, blob in self.iter_vecs():
+            scanned += 1
+            if not blob or len(blob) % 4:
+                skipped += 1
+                continue
+            values = array.array("f")
+            try:
+                values.frombytes(bytes(blob))
+            except (TypeError, ValueError):
+                skipped += 1
+                continue
+            if len(values) != dim:
+                # 维度不同的旧向量不参与排序（编码器换代时会是这样），但不能当成 0 分。
+                skipped += 1
+                continue
+            score = float(sum(x * y for x, y in zip(values, query)))
+            if not math.isfinite(score):
+                skipped += 1
+                continue
+            if min_score is not None and score < min_score:
+                continue
+            hits.append((int(eid), score))
+        hits.sort(key=lambda item: (-item[1], item[0]))
+        return {
+            "hits": [{"id": eid, "score": round(score, 4)} for eid, score in hits[:top]],
+            "scanned": scanned,
+            "skipped": skipped,
+            "dim": dim,
+        }
 
     def _neighbors(self, ids: Iterable[int], rels: Sequence[str]) -> set[int]:
         ids = sorted({int(i) for i in ids})

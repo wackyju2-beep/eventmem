@@ -30,8 +30,8 @@ CASES: list = []
 PASSED: list[str] = []
 FAILED: list[str] = []
 
-EVENT_KEYS = {"id", "ts", "kind", "text", "project", "project_id", "session", "art_id",
-              "art_path", "src_msg", "vec"}
+EVENT_KEYS = {"id", "ts", "kind", "text", "project", "project_id", "session", "agent",
+              "art_id", "art_path", "src_msg", "vec"}
 
 
 def case(fn):
@@ -573,6 +573,43 @@ def test_schema_v6_db_gains_art_path(store: Store) -> None:
 
 
 @case
+def test_agent_label_round_trip(store: Store) -> None:
+    """v11：事件记下是哪个宿主写的（共用一个库时「这条是谁记的」靠它，不是靠猜 session）。"""
+    eid = store.add_event("结果", "两边共用一个库", ts=1000.0, session="hermes:s1",
+                          agent="hermes")
+    other = store.add_event("结果", "另一侧写的", ts=2000.0, session="dsh:s1", agent="dsh")
+    assert store.get_event(eid)["agent"] == "hermes"
+    assert store.get_event(other)["agent"] == "dsh"
+    # 不传就是 NULL（老 adapter / 一次性导入），不猜、不回落成某个默认宿主
+    plain = store.add_event("结果", "没有来源", ts=3000.0)
+    assert store.get_event(plain)["agent"] is None
+
+
+@case
+def test_v10_database_gains_agent_column(store: Store) -> None:
+    """老库（v10，没有 agent 列）打开时补列、老行保持 NULL、版本记成新版。"""
+    tmpdir = tempfile.mkdtemp(prefix="eventmem-v10-")
+    try:
+        db = os.path.join(tmpdir, "old.db")
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,"
+            " kind TEXT NOT NULL, text TEXT NOT NULL, project_id INTEGER, art_id INTEGER,"
+            " art_path TEXT, src_msg INTEGER, session TEXT, vec BLOB, edited_ts REAL);"
+            "INSERT INTO events(ts, kind, text) VALUES(1.0, '决定', 'v10 的老事件');"
+        )
+        ensure_schema(conn)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+        assert "agent" in cols, cols
+        assert conn.execute("SELECT agent FROM events").fetchone()[0] is None
+        assert conn.execute("SELECT text FROM events").fetchone()[0] == "v10 的老事件"
+        assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(SCHEMA_VERSION)
+        conn.close()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@case
 def test_edges_from_mirrors_edges_into(store: Store) -> None:
     a = store.add_event("决定", "老决定", ts=1000.0)
     b = store.add_event("变更", "新变更", ts=2000.0)
@@ -731,7 +768,7 @@ def test_clear_edges_only_touches_edges(store: Store) -> None:
 
 @case
 def test_schema_pragmas_and_idempotence(store: Store) -> None:
-    assert SCHEMA_VERSION == 10
+    assert SCHEMA_VERSION == 12
 
     conn = raw(store)
     try:
@@ -751,6 +788,7 @@ def test_schema_pragmas_and_idempotence(store: Store) -> None:
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(events)").fetchall()]
         assert "vec" in cols, cols
         assert "edited_ts" in cols, cols
+        assert "agent" in cols, cols
 
         edge_cols = [r["name"] for r in conn.execute("PRAGMA table_info(edges)").fetchall()]
         assert "probs" in edge_cols, edge_cols

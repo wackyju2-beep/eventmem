@@ -169,6 +169,20 @@ def install_language_provider(home: Optional[str | Path] = None) -> None:
     set_language_provider(provider)
 
 
+def _models_dir(base: Path) -> str:
+    """ONNX 向量模型所在目录：优先 eventmem 自己的，退回旧的 ``localmem/models``。
+
+    2026-11-14 之前这里直接写死 ``localmem/models``——那意味着删 localmem 插件时会把
+    eventmem 的编码器一起删掉，而且没有任何报错（``encode()`` 静默返回 None、召回退 FTS）。
+    模型必须归 eventmem 所有；legacy 分支只为还没搬家的老部署留着。
+    """
+    own = Path(base) / "eventmem" / "models"
+    legacy = Path(base) / "localmem" / "models"
+    if own.is_dir():
+        return str(own)
+    return str(legacy if legacy.is_dir() else own)
+
+
 def build(home: Optional[str | Path] = None, *, db: Optional[str] = None,
           section: Optional[dict] = None, warn=None,
           strict: bool = False) -> CoreSettings:
@@ -197,7 +211,7 @@ def build(home: Optional[str | Path] = None, *, db: Optional[str] = None,
     settings = CoreSettings(
         db_path=str(db) if db else db_path(base),
         language=language(base),
-        models_root=str(Path(base) / "localmem" / "models"),
+        models_root=_models_dir(base),
         decision=decision,
     )
     overrides = read_overrides(base)

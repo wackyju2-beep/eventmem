@@ -1,6 +1,7 @@
 """eventmem.embed — 事件向量编码器（ONNX 真实实现 + 纯 Python 假实现）。
 
-真实路径与 localmem 共用 Qwen3-Embedding-0.6B ONNX int8 模型：
+真实路径：Qwen3-Embedding-0.6B ONNX int8（`$HERMES_HOME/eventmem/models`，模型归 eventmem 自己所有；
+旧部署的 `localmem/models` 只在没搬家时回退用）。
 last-token pooling → 截断到 ``dim``（MRL）→ **重新** L2 归一化。截断后不重新归一化，
 "余弦"就变成 ``cos x ||v[:d]||``，排的是向量前段能量而不是语义相似度。
 
@@ -33,14 +34,22 @@ INSTRUCTION = "Given a search query, retrieve relevant memories from past conver
 
 
 def _models_root() -> Path:
-    """Where the ONNX model lives.  ``EVENTMEM_MODELS_ROOT`` wins; the default is the
-    path the Hermes deployment has always used, kept so an adapter that says nothing
-    keeps working.  A new host should pass ``CoreSettings.models_root`` instead."""
+    """Where the ONNX model lives, when the host says nothing.
+
+    ``EVENTMEM_MODELS_ROOT`` wins.  Otherwise ``$HERMES_HOME/eventmem/models`` — the model
+    belongs to eventmem and must not live inside another plugin's directory (deleting
+    ``localmem`` once took the encoder with it, silently).  The legacy
+    ``$HERMES_HOME/localmem/models`` is only used when the new path is absent.
+    """
     explicit = os.environ.get("EVENTMEM_MODELS_ROOT")
     if explicit:
         return Path(explicit).expanduser()
     home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
-    return home / "localmem" / "models"
+    own = home / "eventmem" / "models"
+    if own.is_dir():
+        return own
+    legacy = home / "localmem" / "models"
+    return legacy if legacy.is_dir() else own
 
 
 def _missing_runtime() -> str:

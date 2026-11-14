@@ -35,7 +35,7 @@ plugins:
 | `db_path` | `<hermes_home>/eventmem/events.db` | adapter 填的；core 只负责打开 |
 | `language` | `""`（自动） | `zh` / `en`；空 = 宿主语言 → config → en |
 | `max_events_per_call` | `3` | 一次 `evt_add` 的上限，工具 schema 同步显示 |
-| `models_root` | `<hermes_home>/localmem/models` | ONNX 编码器目录（向量臂） |
+| `models_root` | `<hermes_home>/eventmem/models` | ONNX 编码器目录（向量臂）；没有该目录时回退到旧的 `localmem/models` |
 
 ## `edges` — 夜间连边
 

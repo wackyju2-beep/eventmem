@@ -36,6 +36,11 @@ __all__ = ["EventMemProvider"]
 
 PROVIDER_NAME = "eventmem"
 
+#: 写进 ``events.agent`` 的宿主标签，也用作会话 id 的前缀。共用一个库时，这是「这条是谁记的」
+#: 的第一手答案：dsh 那边用 ``dsh``，两边会话 id 也不会撞在一起（宿主自己的 session id 是
+#: ``20261111_235957_fb7a8c`` 这种形式，不会和前缀冲突）。
+AGENT = "hermes"
+
 
 class EventMemProvider(MemoryProvider):
     """Event memory provider: append-only events, project skeleton, hybrid recall."""
@@ -59,6 +64,17 @@ class EventMemProvider(MemoryProvider):
         self._turn_wrote = False
 
     # -- identity / lifecycle ------------------------------------------------
+
+    def _sid(self, raw: str = "") -> Optional[str]:
+        """会话 id 带上宿主前缀（``hermes:<宿主会话 id>``）。
+
+        共用一个库时这是「谁是哪个 agent 的会话」的答案，也让 ``session_project`` 的粘性不会
+        被另一个宿主里同名的会话抢走。前缀只加在这里——落库的会话字符串全程一致。
+        """
+        value = (raw or self._session_id or "").strip()
+        if not value:
+            return None
+        return value if value.startswith(AGENT + ":") else "%s:%s" % (AGENT, value)
 
     @property
     def name(self) -> str:
@@ -133,7 +149,7 @@ class EventMemProvider(MemoryProvider):
 
                     self._settings = replace(self._settings, db_path=S.db_path(self._home))
                 Path(self._settings.db_path).parent.mkdir(parents=True, exist_ok=True)
-                self._core = EventMem(self._settings)
+                self._core = EventMem(self._settings, agent=AGENT)
                 self._init_error = ""
             except Exception as exc:  # noqa: BLE001 - never crash a turn over storage
                 self._init_error = f"{type(exc).__name__}: {exc}"
@@ -160,9 +176,9 @@ class EventMemProvider(MemoryProvider):
         if core is None:
             return None
         if not self._session_project and self._session_id:
-            self._session_project = core.session_project(self._session_id)
+            self._session_project = core.session_project(self._sid() or "")
         return tools.ToolContext(core=core, settings=self._settings,
-                                 session_id=self._session_id, primary=self._primary,
+                                 session_id=self._sid() or "", primary=self._primary,
                                  session_project=self._session_project)
 
     # -- recall --------------------------------------------------------------
@@ -250,15 +266,14 @@ class EventMemProvider(MemoryProvider):
             logger.info("eventmem: extractor found nothing worth recording")
             return
 
-        project = self._session_project or core.session_project(session_id or self._session_id) or None
+        project = self._session_project or core.session_project(self._sid(session_id) or "") or None
         for item in events[:limit]:
             text = str(item.get("text") or "").strip()
             kind = str(item.get("kind") or "").strip()
             if not text or kind not in ("决定", "尝试", "结果", "变更", "教训"):
                 continue
             try:
-                core.add_event(kind, text, project=project,
-                               session=session_id or self._session_id or None)
+                core.add_event(kind, text, project=project, session=self._sid(session_id))
             except Exception as exc:  # noqa: BLE001 - never fail a turn over housekeeping
                 logger.warning("eventmem: auto-record failed (%s)", exc)
 
@@ -277,7 +292,7 @@ class EventMemProvider(MemoryProvider):
             self._turn_wrote = self._turn_wrote or _wrote_something(out)
         if ctx.session_project != self._session_project:
             self._session_project = ctx.session_project
-            ctx.core.set_session_project(self._session_id, self._session_project)
+            ctx.core.set_session_project(self._sid() or "", self._session_project)
         return out
 
 

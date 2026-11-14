@@ -57,13 +57,16 @@ class EventMem:
     """A memory database plus the policies that govern it."""
 
     def __init__(self, settings: CoreSettings, *, store: Any = None,
-                 encoder: Any = None):
+                 encoder: Any = None, agent: str = ""):
         if store is None and not settings.db_path:
             raise ValueError("CoreSettings.db_path is empty")
         self.settings = settings
         self.store = store if store is not None else Store(str(Path(settings.db_path)))
         self._encoder = encoder
         self._encoder_dead = False
+        # 这个实例代表哪个宿主（adapter 声明一次，所有写入自动带标签）。共用一个库时，
+        # 「这条是谁记的」是 events.agent 的回答；空串 = 没声明（老 adapter / 一次性导入）。
+        self.agent = (agent or "").strip()
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -194,14 +197,19 @@ class EventMem:
                   project: Optional[str] = None, session: Optional[str] = None,
                   art_id: Optional[int] = None, art_path: Optional[str] = None,
                   extra_projects: Optional[list[str]] = None,
-                  vec: Any = None) -> int:
-        """Append one event; encodes the vector unless the caller already did."""
+                  agent: Optional[str] = None, vec: Any = None) -> int:
+        """Append one event; encodes the vector unless the caller already did.
+
+        ``agent`` overrides the instance's host label for this one write (imports, backfills);
+        ``None`` means "use the label this EventMem was constructed with".
+        """
         if vec is None:
             label = project or UNFILED
             vec = self.encode("[%s] %s %s" % (label, kind, text))
         return self.store.add_event(kind, text, ts=ts, project=project, session=session,
                                     art_id=art_id, art_path=art_path,
-                                    extra_projects=extra_projects, vec=vec)
+                                    extra_projects=extra_projects,
+                                    agent=self.agent if agent is None else agent, vec=vec)
 
     def get_event(self, event_id: int) -> Optional[dict]:
         return self.store.get_event(int(event_id))
@@ -303,6 +311,9 @@ class EventMem:
             out["note"] = "this event has no artifact"
         if event.get("art_path"):
             out["path"] = event["art_path"]
+        # 共用一个库时才知道有这一列：单宿主的事件不回这个字段，省得每次 expand 都多一行噪声。
+        if event.get("agent"):
+            out["agent"] = event["agent"]
         return out
 
     def new_recall_state(self) -> Any:

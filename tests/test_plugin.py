@@ -38,6 +38,7 @@ from eventmem import (  # noqa: E402
     EventMemProvider, MEMORY_HINT_ZH, is_state_changing, memory_hint, on_tool_result, register,
 )
 from eventmem import extract as extract_mod  # noqa: E402
+from eventmem.provider import AGENT  # noqa: E402
 from eventmem_core import EventMem  # noqa: E402
 from eventmem_core.settings import CoreSettings  # noqa: E402
 
@@ -89,7 +90,7 @@ class FakeStore:
 
     def add_event(self, kind, text, *, ts=None, project=None, session=None,
                   src_msg=None, art_id=None, art_path=None, extra_projects=None,
-                  vec=None) -> int:
+                  agent=None, vec=None) -> int:
         if project is not None and project not in self.projects:
             raise AssertionError(f"add_event got unknown project {project!r}")
         eid = self._event_id
@@ -97,7 +98,7 @@ class FakeStore:
         self.events[eid] = {
             "id": eid, "ts": ts or 0.0, "kind": kind, "text": text,
             "project": project, "project_id": (self.projects.get(project) or {}).get("id"),
-            "session": session, "art_id": art_id, "art_path": art_path,
+            "session": session, "agent": agent, "art_id": art_id, "art_path": art_path,
             "src_msg": src_msg, "vec": vec,
         }
         return eid
@@ -182,7 +183,7 @@ def make_provider(store=None, session="sess-1", settings=None) -> EventMemProvid
     """Provider wired to a FakeStore without initialize() (no files, no encoder)."""
     store = store if store is not None else FakeStore()
     st = settings or CoreSettings(db_path=":memory:")
-    core = EventMem(st, store=store, encoder=None)
+    core = EventMem(st, store=store, encoder=None, agent=AGENT)
     core._encoder_dead = True              # never import a real encoder in tests
     provider = EventMemProvider()
     provider._core = core
@@ -451,6 +452,26 @@ def test_evt_add_writes_known_project_and_links():
     check_eq(store.edges, [{"src": 101, "dst": 100, "rel": "因为", "conf": 1.0,
                             "decided_by": "llm_batch", "cross": None}], "batch edge")
     check_eq(provider._session_project, "小主机", "project becomes the session default")
+
+
+@case
+def test_writes_carry_the_host_label():
+    """共用一个库时，事件带 ``agent='hermes'``、会话带 ``hermes:`` 前缀（dsh 那边同理）。"""
+    store = FakeStore()
+    provider = make_provider(store)
+    last_tool_json(provider, "evt_add", {"events": [
+        {"kind": "结果", "text": "带标签写一条", "project": "小主机"},
+    ]})
+    first = next(iter(store.events.values()))
+    check_eq(first["agent"], "hermes", "事件带宿主标签")
+    check_eq(first["session"], "hermes:sess-1", "会话带宿主前缀")
+    check_eq(provider._core.agent, "hermes", "实例声明了宿主")
+    # 前缀只加一次：宿主自己给的 id 已经带前缀时不能变成 hermes:hermes:…
+    check_eq(provider._sid("hermes:sess-1"), "hermes:sess-1", "不重复加前缀")
+    check_eq(provider._sid(""), "hermes:sess-1", "空值回落到当前会话")
+    # expand 把来源带给模型；没有标签的事件不回这个字段（单宿主不多一行噪声）
+    eid = next(iter(store.events))
+    check_eq(provider._core.expand(eid).get("agent"), "hermes", "expand 带来源")
 
 
 @case

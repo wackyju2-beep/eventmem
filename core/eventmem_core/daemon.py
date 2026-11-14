@@ -12,9 +12,10 @@ loop plus three things a worker could not have:
 * **the GUI** — a small static page served from the same port and nothing else.  It is a
   thin client of exactly these routes, so anything the page can do, ``curl`` can do.
 
-The data plane does **not** go through here: recall and ``evt_add`` still run inside the
-host process, importing the core directly.  This process only answers "which backend,
-when, and how much".
+The data plane used to not go through here: recall and ``evt_add`` ran inside the host
+process, importing the core directly.  That is still the default (same machine, same file),
+but :meth:`Daemon.data_plane` now mirrors ``EventMem`` over HTTP for a host that lives on
+another machine — the database file itself never leaves this box.
 
 Routes::
 
@@ -38,6 +39,24 @@ Routes::
     GET  /api/logs                   this process's recent log lines
     POST /api/run-once               run one pass now (409 if one is already running)
     GET  /api/runs                   the last few pass results
+    -- data plane (a thin mirror of EventMem, for a host on another machine) --
+    POST /api/mem/events             add one event (kind, text, project, session, agent…)
+    GET  /api/mem/events/<id>        one event + its artifact text (``EventMem.expand``)
+    POST /api/mem/events/<id>/forget remove one event (``EventMem.forget``)
+    POST /api/mem/neighbors          edges around one event (``EventMem.neighbours``)
+    POST /api/mem/recall             recall block + project candidates for one query
+    GET  /api/mem/projects           the project vocabulary
+    POST /api/mem/projects           create a project (the only way one is born)
+    POST /api/mem/session/project    read the session's sticky project; send one to set it
+    -- graph (the 3D view: whole tables in, human edits out) --
+    GET  /api/mem/graph              events + edges + pairs + positions + facets
+    POST /api/mem/graph/semantic     rank events by embedding similarity to free text
+    POST /api/mem/graph/event        edit one event's text / kind / project
+    POST /api/mem/graph/events       batch-edit project / kind on a selection
+    POST /api/mem/graph/edge         write or re-point one human relation
+    POST /api/mem/graph/edge/delete  delete one relation (tombstoned against jev)
+    POST /api/mem/graph/positions    persist dragged atom positions
+    POST /api/mem/graph/positions/clear  drop every saved position
 """
 
 from __future__ import annotations
@@ -50,6 +69,7 @@ import logging
 import math
 import mimetypes
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -64,16 +84,31 @@ from . import packs as packs_mod
 from . import runtime
 from . import ui_strings
 from . import worker as W
+from .core import EventMem
 from .decision import from_pack
 from .packs import Pack, PackError
 from .schema import SCHEMA_VERSION
 from .settings import CoreSettings, describe
-from .store import Store
+from .store import Store, KINDS, RELS, _KEEP
 
 _log = logging.getLogger(__name__)
 
 #: How long a backend that probed fine but failed every decision is skipped for.
 COOLDOWN = 300
+
+#: Data-plane recall keeps one ``RecallState`` per session id, so a remote host gets the
+#: same "already shown this session" collapsing an in-process adapter would. Bounded, LRU.
+RECALL_STATES = 64
+
+#: 人工校正的边界：正文上限、一次批量最多几条、一次最多存多少个位置。
+MAX_GRAPH_TEXT = 500
+MAX_GRAPH_BATCH = 500
+MAX_GRAPH_POSITIONS = 500
+
+
+def _rendered_count(block: str) -> int:
+    """Event lines in a rendered recall block (the header has no ``#id``)."""
+    return sum(1 for line in block.splitlines() if re.search(r"#\d+", line))
 
 __all__ = ["Daemon", "make_server", "acquire_lock", "serve", "main", "API_PORT", "UI_DIR",
            "NO_GUARD"]
@@ -86,7 +121,9 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 
 
 class Daemon:
-    """The resident object.  Holds no database handle: every read opens/closes."""
+    """The resident object.  Management reads open and close the database per call; the
+    data plane (``/api/mem/*``) keeps one ``EventMem`` alive because loading the encoder
+    costs ~1.3 s and a remote host recalls every turn."""
 
     def __init__(self, settings: CoreSettings, *, packs_root: str = "",
                  settings_store: Optional[Any] = None):
@@ -100,6 +137,11 @@ class Daemon:
         self.started = time.time()
         self._pass_lock = threading.Lock()
         self._config_lock = threading.RLock()
+        #: 数据面：长驻 EventMem + 每会话的 RecallState。管理与数据面共用一把锁，
+        #: 所以「reset 掉一个会话」和「同一会话同时来的两个 recall」不会打架。
+        self._mem_lock = threading.RLock()
+        self._mem_obj: Optional[EventMem] = None
+        self._recall_states: collections.OrderedDict = collections.OrderedDict()
         self._preview_tokens: set[str] = set()
         self._backfill_plans: dict[str, Any] = {}
         self._backfill: dict[str, Any] = {'state': 'idle', 'pairs': 0, 'edges': 0,
@@ -915,6 +957,385 @@ class Daemon:
         stopped = runtime.stop(pack)
         return 200, {"ok": True, "stopped": stopped}
 
+    # -------------------------------------------------------------- data plane
+    # 数据面 = EventMem 的 REST 镜像。库文件只在本机：另一台机器上的宿主（另一个 agent）
+    # 通过这里读写同一份记忆，SQLite 本身绝不放网络盘。
+    # 这里**不是**工具层：批量上限、index 链接、归档提示、脱敏、项目黏性都归调用它的
+    # adapter——那才是宿主相关的翻译。
+
+    def mem(self) -> EventMem:
+        """数据面用的长驻 ``EventMem``（编码器只加载一次）。"""
+        with self._mem_lock:
+            if self._mem_obj is None:
+                self._mem_obj = EventMem(self.settings)
+            return self._mem_obj
+
+    def close_mem(self) -> None:
+        with self._mem_lock:
+            mem, self._mem_obj = self._mem_obj, None
+        if mem is not None:
+            try:
+                mem.close()
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                pass
+
+    def data_plane(self, method: str, tail: list[str],
+                   body: Any) -> tuple[int, dict[str, Any]]:
+        try:
+            if tail == ["events"] and method == "POST":
+                return self.mem_add(body)
+            if tail == ["recall"] and method == "POST":
+                return self.mem_recall(body)
+            if tail == ["neighbors"] and method == "POST":
+                return self.mem_neighbors(body)
+            if tail == ["graph"] and method == "GET":
+                return self.mem_graph()
+            if tail == ["graph", "semantic"] and method == "POST":
+                return self.mem_graph_semantic(body)
+            if tail == ["graph", "event"] and method == "POST":
+                return self.mem_graph_event(body)
+            if tail == ["graph", "events"] and method == "POST":
+                return self.mem_graph_events(body)
+            if tail == ["graph", "edge"] and method == "POST":
+                return self.mem_graph_edge(body)
+            if tail == ["graph", "edge", "delete"] and method == "POST":
+                return self.mem_graph_edge_delete(body)
+            if tail == ["graph", "positions"] and method == "POST":
+                return self.mem_graph_positions(body)
+            if tail == ["graph", "positions", "clear"] and method == "POST":
+                return self.mem_graph_positions_clear()
+            if tail == ["projects"] and method == "GET":
+                return 200, {"projects": self.mem().list_projects()}
+            if tail == ["projects"] and method == "POST":
+                name = str((body or {}).get("name") or "").strip() if isinstance(body, dict) else ""
+                if not name:
+                    return 400, {"error": "name is required"}
+                return 200, {"project": self.mem().add_project(name)}
+            if tail == ["session", "project"] and method == "POST":
+                return self.mem_session_project(body)
+            if len(tail) == 2 and tail[0] == "events" and method == "GET":
+                event_id = int(tail[1])
+                out = self.mem().expand(event_id)
+                return (200, out) if out else (404, {"error": f"no event #{event_id}"})
+            if (len(tail) == 3 and tail[0] == "events" and tail[2] == "forget"
+                    and method == "POST"):
+                event_id = int(tail[1])
+                return 200, {"id": event_id, "removed": bool(self.mem().forget(event_id))}
+        except ValueError as exc:
+            return 400, {"error": f"ValueError: {exc}"}
+        except Exception as exc:  # noqa: BLE001 - a bad value must not 500 the daemon
+            return 400, {"error": f"{type(exc).__name__}: {exc}"}
+        return 404, {"error": "not found"}
+
+    def mem_add(self, body: Any) -> tuple[int, dict[str, Any]]:
+        if not isinstance(body, dict):
+            return 400, {"error": "body must be a JSON object"}
+        kind = str(body.get("kind") or "").strip()
+        text = str(body.get("text") or "").strip()
+        if not kind or not text:
+            return 400, {"error": "kind and text are required"}
+        mem = self.mem()
+        art_id = None
+        if body.get("artifact"):
+            art_id = mem.add_artifact(str(body.get("artifact_kind") or "其他"),
+                                      str(body["artifact"]))
+        event_id = mem.add_event(
+            kind, text,
+            project=body.get("project") or None,
+            session=body.get("session") or None,
+            # 不传就是 NULL：跨机的写入必须自带 ``agent``，这里不替调用方猜身份。
+            agent=body.get("agent") or None,
+            art_id=art_id,
+            art_path=str(body.get("path") or "").strip() or None,
+            extra_projects=body.get("extra_projects") or None,
+        )
+        return 200, {"ok": True, "id": event_id, "agent": body.get("agent") or None}
+
+    def mem_recall(self, body: Any) -> tuple[int, dict[str, Any]]:
+        payload = body if isinstance(body, dict) else {}
+        query = str(payload.get("query") or "").strip()
+        if not query:
+            return 400, {"error": "query is required"}
+        mem = self.mem()
+        session = str(payload.get("session") or "").strip()
+        state = None
+        if session:
+            with self._mem_lock:
+                if payload.get("reset"):
+                    self._recall_states.pop(session, None)
+                state = self._recall_states.get(session)
+                if state is None:
+                    state = mem.new_recall_state()
+                    self._recall_states[session] = state
+                    while len(self._recall_states) > RECALL_STATES:
+                        self._recall_states.popitem(last=False)
+                else:
+                    self._recall_states.move_to_end(session)
+        budget = payload.get("budget_tokens")
+        qvec = mem.query_vector(query)
+        block = mem.recall(query, state=state, qvec=qvec,
+                           budget_tokens=int(budget) if budget else None) or ""
+        # 项目候选与召回块分开回：宿主自己决定拼成一段还是两段（Hermes 是拼在块尾）。
+        hint = mem.project_hint(query, qvec=qvec) or ""
+        return 200, {"block": block, "hint": hint, "count": _rendered_count(block),
+                     "stateless": not bool(session)}
+
+    def mem_session_project(self, body: Any) -> tuple[int, dict[str, Any]]:
+        """会话的项目粘性：``{session}`` 读，``{session, project}`` 写。
+
+        粘性本身是 adapter 的事（每次写事件时自己决定要不要带 project），但「哪个会话
+        记在哪个项目」必须跟着数据库走：宿主进程重启后，同一会话的后半段才不会散到
+        unfiled 里。Hermes 侧一直用同一张 ``session_project`` 表，这里只是把它开到
+        数据面上，语义与 ``EventMem.session_project`` 一一对应。
+        """
+        payload = body if isinstance(body, dict) else {}
+        session = str(payload.get("session") or "").strip()
+        if not session:
+            return 400, {"error": "session is required"}
+        mem = self.mem()
+        if "project" not in payload:
+            return 200, {"session": session, "project": mem.session_project(session) or ""}
+        raw = payload.get("project")
+        name = "" if raw is None else str(raw).strip()
+        if name.lower() in ("", "unfiled", "未归类"):
+            name = ""
+        if name and mem.store.get_project(name) is None:
+            return 400, {"error": f"unknown project: {name!r}"}
+        mem.set_session_project(session, name or None)
+        return 200, {"ok": True, "session": session, "project": name}
+
+    def mem_neighbors(self, body: Any) -> tuple[int, dict[str, Any]]:
+        payload = body if isinstance(body, dict) else {}
+        raw_id = payload.get("event_id")
+        if raw_id is None:
+            return 400, {"error": "event_id is required"}
+        rels = payload.get("rels")
+        if isinstance(rels, str):
+            rels = [part for part in re.split(r"[,/\s]+", rels) if part]
+        if not isinstance(rels, list) or not rels:
+            rels = None
+        event_id = int(raw_id)
+        block = self.mem().neighbours(event_id, rels=rels,
+                                      depth=int(payload.get("depth") or 1)) or ""
+        return 200, {"event_id": event_id, "context": block, "found": bool(block.strip())}
+
+    # -------------------------------------------------- graph (可视化 / 人工校正)
+    # 图谱是**整表**读、**人工**写的另一条路径：召回都是 top-k，只有它要全库；
+    # 人工修改是少数几条 UPDATE，但要顺带处理项目归属、跨项目标记和候选重选。
+    # 所以它不经过工具层，和 ``/api/mem/events`` 一样是数据面的一部分。
+
+    def mem_graph(self) -> tuple[int, dict[str, Any]]:
+        return 200, self.mem().store.graph_view()
+
+    def mem_graph_semantic(self, body: Any) -> tuple[int, dict[str, Any]]:
+        payload = body if isinstance(body, dict) else {}
+        query = str(payload.get("q") or "").strip()
+        if not query:
+            return 400, {"error": "q 不能为空"}
+        if len(query) > MAX_GRAPH_TEXT:
+            return 400, {"error": f"q 最多 {MAX_GRAPH_TEXT} 字"}
+        try:
+            top = int(payload.get("top") if payload.get("top") is not None else 16)
+        except (TypeError, ValueError):
+            top = 16
+        top = max(1, min(top, 200))
+        raw_min = payload.get("min_score")
+        try:
+            min_score = float(raw_min) if raw_min is not None else None
+        except (TypeError, ValueError):
+            min_score = None
+        mem = self.mem()
+        qvec = mem.query_vector(query)
+        if qvec is None:
+            return 503, {"error": "Embedding 编码器不可用（模型文件或运行时缺失）"}
+        try:
+            found = mem.store.semantic_hits(qvec, top=top, min_score=min_score)
+        except ValueError as exc:
+            return 503, {"error": str(exc)}
+        return 200, {"ok": True, "query": query, "top": top, "dim": found["dim"],
+                     "scanned": found["scanned"], "skipped": found["skipped"],
+                     "hits": found["hits"]}
+
+    @staticmethod
+    def _graph_project_id(store: Store, name: Any) -> tuple[Optional[int], Optional[str]]:
+        """``(project_id, error)``: 未归类 → ``(None, None)``; an unknown name is an error."""
+        if name is None:
+            return None, None
+        name = str(name).strip()
+        if not name or name.lower() == "unfiled" or name == "未归类":
+            return None, None
+        row = store.get_project(name)
+        if row is None:
+            return None, f"没有项目 {name!r}；先在图谱里建（proj_add）"
+        return int(row["id"]), None
+
+    def mem_graph_event(self, body: Any) -> tuple[int, dict[str, Any]]:
+        """Edit one event's text / kind / project, then re-encode and re-mark its candidates."""
+        payload = body if isinstance(body, dict) else {}
+        try:
+            event_id = int(payload["id"])
+        except (KeyError, TypeError, ValueError):
+            return 400, {"error": "id 必须是事件编号"}
+        text = payload.get("text")
+        kind = payload.get("kind")
+        has_project = "project" in payload
+        if text is None and kind is None and not has_project:
+            return 400, {"error": "text、kind、project 至少要改一个"}
+        if text is not None:
+            if not isinstance(text, str) or not text.strip():
+                return 400, {"error": "正文不能为空"}
+            if len(text) > MAX_GRAPH_TEXT:
+                return 400, {"error": f"正文最多 {MAX_GRAPH_TEXT} 字"}
+        if kind is not None and kind not in KINDS:
+            return 400, {"error": f"类型必须是 {'/'.join(KINDS)}"}
+
+        mem = self.mem()
+        store = mem.store
+        event = store.get_event(event_id)
+        if event is None:
+            return 404, {"error": f"事件 #{event_id} 不存在"}
+        pid, error = self._graph_project_id(store, payload.get("project")) if has_project else (None, None)
+        if error:
+            return 400, {"error": error}
+
+        stamp = time.time()
+        store.update_event(
+            event_id,
+            text=text,
+            kind=kind,
+            project_id=(pid if has_project else _KEEP),
+            edited_ts=stamp,
+        )
+        updated = store.get_event(event_id) or event
+        state, dim, note = self._reembed_event(mem, updated)
+        changed_project = has_project and (updated.get("project") or "") != (event.get("project") or "")
+        changed_kind = kind is not None and kind != event.get("kind")
+        cross = store.refresh_cross([event_id]) if changed_project else 0
+        reseat = store.mark_reseat([event_id]) if (changed_project or changed_kind) else 0.0
+        return 200, {"ok": True, "id": event_id, "vector": state, "dim": int(dim), "note": note,
+                     "cross": int(cross), "reseat": reseat or None}
+
+    def _reembed_event(self, mem: EventMem, event: dict[str, Any]) -> tuple[str, int, str]:
+        """Re-encode one event from its stored text/kind/project.
+
+        Same payload as ``EventMem.add_event`` (``[项目] 类型 正文``) so an edited event keeps
+        competing in the vector arm with the text a human just approved.  A missing encoder skips
+        the vector only — the text edit always lands.
+        """
+        vec = mem.encode("[%s] %s %s" % (event.get("project") or "未归类", event["kind"], event["text"]))
+        if not vec:
+            return "skipped", 0, "Embedding 编码器不可用（模型文件或运行时缺失）"
+        mem.store.update_vec(int(event["id"]), vec)
+        return "updated", len(vec) // 4, ""
+
+    def mem_graph_events(self, body: Any) -> tuple[int, dict[str, Any]]:
+        """Batch-edit ``project`` / ``kind`` on a lasso selection.
+
+        A project is not a cosmetic label: it is part of the re-encoded vector payload
+        (``[项目] 类型 正文``), it is a membership row in ``event_projects`` (that is what candidate
+        selection reads) and it decides ``edges.cross``.  No edge is deleted: existing relations
+        stay, only never-asked pairs can appear.
+        """
+        if not isinstance(body, dict):
+            return 400, {"error": "要一个 JSON 对象"}
+        raw = body.get("ids")
+        if not isinstance(raw, list) or not raw:
+            return 400, {"error": "ids 必须是非空数组"}
+        ids: list[int] = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return 400, {"error": "ids 只能是事件编号"}
+            if value not in ids:
+                ids.append(value)
+            if len(ids) > MAX_GRAPH_BATCH:
+                return 400, {"error": f"一次最多改 {MAX_GRAPH_BATCH} 条"}
+        has_project = "project" in body
+        kind = body.get("kind")
+        if kind is not None and kind not in KINDS:
+            return 400, {"error": f"类型必须是 {'/'.join(KINDS)}"}
+        if not has_project and kind is None:
+            return 400, {"error": "project 或 kind 至少要改一个"}
+
+        mem = self.mem()
+        store = mem.store
+        pid, error = self._graph_project_id(store, body.get("project")) if has_project else (None, None)
+        if error:
+            return 400, {"error": error}
+        found = sorted(int(ev["id"]) for ev in store.get_events(ids))
+        if not found:
+            return 404, {"error": "这些事件都不存在"}
+        missing = sorted(set(ids) - set(found))
+
+        stamp = time.time()
+        for event_id in found:
+            store.update_event(event_id, kind=kind, project_id=(pid if has_project else _KEEP),
+                               edited_ts=stamp)
+        # 项目进了向量 payload，不重算等于检索还按旧项目走。
+        vector = {"updated": 0, "skipped": 0, "note": ""}
+        for event in store.get_events(found):
+            state, _dim, note = self._reembed_event(mem, event)
+            vector[state] = vector.get(state, 0) + 1
+            if state == "skipped" and not vector["note"]:
+                vector["note"] = note
+        cross = store.refresh_cross(found)
+        reseat = store.mark_reseat(found)
+        return 200, {"ok": True, "updated": len(found), "missing": missing, "vector": vector,
+                     "cross": int(cross), "reseat": reseat or None}
+
+    def mem_graph_edge(self, body: Any) -> tuple[int, dict[str, Any]]:
+        """Create or re-point a human relation. ``old_rel`` present = replace it."""
+        payload = body if isinstance(body, dict) else {}
+        try:
+            src, dst = int(payload["src"]), int(payload["dst"])
+        except (KeyError, TypeError, ValueError):
+            return 400, {"error": "src/dst 必须是事件编号"}
+        rel = payload.get("rel")
+        old_rel = payload.get("old_rel")
+        if rel not in RELS:
+            return 400, {"error": f"关系必须是 {'/'.join(RELS)}"}
+        if old_rel is not None and old_rel not in RELS:
+            return 400, {"error": "old_rel 不合法"}
+        try:
+            conf = float(payload.get("conf")) if payload.get("conf") is not None else 0.5
+        except (TypeError, ValueError):
+            conf = 0.5
+        self.mem().store.set_edge(src, dst, rel, conf, old_rel=old_rel)
+        return 200, {"ok": True, "src": src, "dst": dst, "rel": rel}
+
+    def mem_graph_edge_delete(self, body: Any) -> tuple[int, dict[str, Any]]:
+        payload = body if isinstance(body, dict) else {}
+        try:
+            src, dst = int(payload["src"]), int(payload["dst"])
+        except (KeyError, TypeError, ValueError):
+            return 400, {"error": "src/dst 必须是事件编号"}
+        rel = payload.get("rel")
+        if rel not in RELS:
+            return 400, {"error": f"关系必须是 {'/'.join(RELS)}"}
+        removed = self.mem().store.delete_edge(src, dst, rel)
+        return 200, {"ok": True, "deleted": 1 if removed else 0}
+
+    def mem_graph_positions(self, body: Any) -> tuple[int, dict[str, Any]]:
+        """摆过的位置存下来：刷新/重启后原子还在被拉到的位置。"""
+        payload = body if isinstance(body, dict) else {}
+        items = payload.get("positions")
+        if not isinstance(items, list):
+            return 400, {"error": "positions 必须是数组"}
+        rows = []
+        for item in items[:MAX_GRAPH_POSITIONS]:
+            try:
+                event_id = int(item["id"])
+                x, y, z = float(item["x"]), float(item["y"]), float(item["z"])
+            except (KeyError, TypeError, ValueError):
+                return 400, {"error": f"位置条目不合法：{item!r}"}
+            if not all(map(math.isfinite, (x, y, z))):
+                return 400, {"error": "坐标必须是有限数"}
+            rows.append((event_id, x, y, z))
+        saved = self.mem().store.save_atom_positions(rows)
+        return 200, {"ok": True, "saved": saved}
+
+    def mem_graph_positions_clear(self) -> tuple[int, dict[str, Any]]:
+        return 200, {"ok": True, "cleared": self.mem().store.clear_atom_positions()}
+
     # ------------------------------------------------------------------ routing
 
     def route(self, method: str, parts: list[str],
@@ -922,6 +1343,9 @@ class Daemon:
         if not parts or parts[0] != "api":
             return 404, {"error": "not found"}
         tail = parts[1:]
+
+        if tail[:1] == ["mem"]:
+            return self.data_plane(method, tail[1:], body)
 
         if method == "GET" and tail == ["health"]:
             return 200, self.health()

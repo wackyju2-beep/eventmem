@@ -34,7 +34,8 @@
 3. **i18n 去宿主**：core 不再 `import agent.i18n`；adapter 在 initialize 时
    注册语言 provider。
 4. **编码器目录**：`EVENTMEM_MODELS_ROOT` / `CoreSettings.models_root`，
-   默认仍是 `<hermes_home>/localmem/models`。
+   默认 `<hermes_home>/eventmem/models`（没有时回退旧的 `<hermes_home>/localmem/models`）。
+   模型归 eventmem 自己——2026-11-14 删 localmem 时把 597M 模型一起删了，召回静默退化成 FTS。
 
 ## 没改的东西（故意的）
 
@@ -263,3 +264,42 @@ tar czf - --exclude=.git --exclude=__pycache__ . | \
 - **量控制台的工具在 `tools/plugin-smoke/harness/`**：真 Chromium + 假 ctx（离线，React 取自本地
   node_modules）。改完插件先 `build.sh` 再开 8899，`__harness.gaps()/posts()` 出数；
   浏览器缓存要先用 CDP 关掉，否则量的是旧包。
+
+## dsh 侧：待判/直播条、调度页、会话项目（2026-11-14）
+
+- **数据面新增一条路由**：`POST /api/mem/session/project`（`{session}` 读，`{session,project}` 写）
+  落 `session_project` 表 —— 和 Hermes 同一张表。加它的原因：dsh 的会话粘性原来只在内存里，
+  插件重载/Harness 重启后同一会话的后半段会散到 unfiled。dsh adapter 现在首次用到会话时读一次、
+  项目变了回写一次，写失败留 `projectDirty` 下回合重试。
+- **dsh 待判为什么看着不动**：不是算错，是缺了 Hermes 那套呈现。现在概览上方有直播条
+  （后端 / 本轮对数边数 / `+N` 增量闪 / 用时 / 切换并重跑），pass 在跑时轮询 1.5 s（空闲 5 s），
+  三块砖和直播条数字都走 `FlipDigits`（只翻变了的那几位）。待判副标题改成
+  `第 x/y 个事件 · 已判 n 对（预计）`。
+- **调度页按 Hermes 重做**：自动运行（唯一的暂停开关）/ 预设 / 候选选择与成本 / 关系接受条件
+  （margin + 五个 `min_conf_*`，单独保存）/ 历史关系重校准 / 历史候选补算 / 说明。
+  历史操作不发 `/api/config`，保存不发历史操作；预览 token 绑定参数，改一个框就作废。
+  顶部重复的「暂停全部判断」删了（和 Hermes 一致）。
+- **代理白名单**同步放开 `recalibrate/*`、`backfill/*`、`stop`、`switch`，历史路由超时 180 s。
+- **验证**：Mint 上 `tests/test_daemon.py` 20/20（含新用例）；Windows 侧 jsdom + 真 React 18
+  的客户端冒烟（40 项，含 +N、翻页、两张历史卡、预览请求体只带该带的字段）与代理白名单
+  （33 允许 / 16 拒绝）全过。
+
+## dsh 侧：图谱的三条点击规则（2026-11-14 晚）
+
+`adapters/dsh/client.js` 的图谱（记忆后台 → 图谱）改了点选逻辑，三条互相配套，别再退回旧的
+「有焦点就只退出」：
+
+- **点亮的东西可以直接点**：选中一颗原子时，`atomFocusRing()` 一次算出它自己、全部一跳邻居、
+  二跳里上舞台的 16 颗（`ring`）和与它相连的关系边（`edges`）。只有 `ring` 里的原子和
+  `edges` 里的边能一次点中换选；点其它地方仍然只退出，第二下才选中新目标。
+  舞台高亮用的就是父组件这份 `focusRing`，不再等 `focusReq` 副作用，换选不会闪一帧旧邻域。
+- **边平常不可点**：舞台命中表只在「选中原子」时收集与它相连的高亮边，没有选中时是空的，
+  点空白不会误中一条边。要看别的边就先点它的端点原子，或用检查器里的「连着的边」列表。
+- **筛选面板是浮层**：按下它外面（落在 `.emc-g-stage` 上）的那一次只关面板，click 在捕获阶段
+  被吞掉，不会穿透去选中原子/边；第二次点才生效。
+
+验收在 `tools/dsh-graph-bench`：`__ringPolicy()`（二跳原子一次点中）、`__edgePolicy()`
+（无选中时命中表为 0、有选中时只含相连边、点边出关系检查器、悬停给 pointer）、
+`__panelPolicy()`（第一下只关框、第二下才选中）。`__emEdgeHits()` / `__emRingLayers()`
+是调试口，只在 `window.__EM_GRAPH_DEBUG` 下挂。
+

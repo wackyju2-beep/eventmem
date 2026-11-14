@@ -145,6 +145,17 @@ mem.recall("上次那个盘怎么选的？", state=mem.new_recall_state())
 Hermes 是第一个 adapter，DeepSeek Harness 是下一站。换宿主时不该重写的东西，恰好就是 core 里的那些：
 margin、活跃链头、RRF、骨架、渲染预算。
 
+两个宿主共用一个库也分得清谁写的：`EventMem(settings, agent="hermes")` 把这个实例的标签写进
+`events.agent`，adapter 再把自己的会话 id 加上宿主前缀（`hermes:20261111_…`）。没有 `agent` 的行就是
+早于这一列的老事件——不猜、不回填。
+
+默认部署形态是**一台机器**：一个 `events.db`、一个 daemon、任意多个宿主进程通过 WAL 读写。
+同机的两个 agent 可以共用这个文件，只要**每个库只有一个 daemon**（第二个会直接拒绝启动：
+`<db>.daemon.lock` 是 `flock`）。跨机器的宿主改用 daemon 的**数据面**（同一个 loopback 端口，
+走 SSH 隧道）：`POST /api/mem/events`、`POST /api/mem/recall`、`GET /api/mem/projects`、
+`GET /api/mem/events/<id>`……它是 `EventMem` 的薄镜像——只做校验和渲染，批量、批内链接、脱敏都归 adapter。
+库文件永远不出这台机器；接口没有鉴权，所以只绑回环，这是设计而不是疏漏。规格见 [`docs/api.md`](docs/api.md)。
+
 图谱后端是「adapter 一律走 `EventMem`」的唯一例外：它直接读同一张 SQLite 库。它要的是整张事件表
 （provider 的召回查询全是 top-k），而它的人工编辑就是两条 UPDATE。这样 FastAPI 不进记忆插件，
 图谱那边也永远不注册 provider。
@@ -236,7 +247,9 @@ adapter 里还带了一个 `eventmem-gui` dashboard 插件，把整个管理台�
 `EVENTMEM_DAEMON_URL` 把代理指过去。
 
 向量臂（可选）：`pip install onnxruntime tokenizers numpy`，再把 Qwen3-Embedding-0.6B 的 ONNX
-（512 维 int8）放进 `~/localmem/models/`。缺任何一个都只是静默降级到纯 FTS。
+（512 维 int8：`tokenizer.json` + `model_int8.onnx`）放进 `<hermes_home>/eventmem/models/`——
+模型归 eventmem 自己所有，不要塞进别的插件目录。缺任何一个都只是静默降级到纯 FTS，
+所以要主动查 `Encoder(...).available()` 或日志里的 `encoder ready`，别把安静当成没事。
 
 ## 用起来
 
