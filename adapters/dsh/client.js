@@ -34,6 +34,14 @@ window.__ModuleLoader__.load({
       '日志': 'Logs',
       'eventmem daemon 的记忆运维台：概览、后端链路、模型、连边调度与日志。': 'The eventmem daemon backstage: overview, backend chain, models, edge schedule, and logs.',
       'daemon 不可达': 'daemon unreachable',
+      '连接中…': 'Connecting…',
+      '重启服务': 'Restart service',
+      '重启 eventmem 服务？服务将短暂不可用，正在进行的任务会先结束。': 'Restart the eventmem service? It will be temporarily unavailable while ongoing tasks finish.',
+      '正在请求重启…': 'Requesting restart…',
+      '正在等待服务重启…': 'Waiting for the service to restart…',
+      '服务已重启': 'Service restarted',
+      '暂未确认服务重启，请检查服务状态。': 'Restart not yet confirmed. Check the service status.',
+      '重启请求未完成，请检查服务状态。': 'Restart request did not complete. Check the service status.',
       '暂停全部判断': 'Pause all judging',
       '继续判断': 'Resume judging',
       '已暂停：这一轮停下后不再自动开新的一轮': 'Paused: the current pass stops and no new pass starts',
@@ -372,7 +380,11 @@ window.__ModuleLoader__.load({
       const response = await fetch(url, init)
       let data = {}
       try { data = await response.json() } catch { data = {} }
-      if (!response.ok) throw new Error((data && data.error) || ('HTTP ' + response.status))
+      if (!response.ok) {
+        const error = new Error((data && data.error) || ('HTTP ' + response.status))
+        error.status = response.status
+        throw error
+      }
       return data
     }
 
@@ -402,7 +414,8 @@ window.__ModuleLoader__.load({
 .emc-head-in{max-width:none;margin:0;display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;justify-content:space-between}
 .emc-title{margin:0;font-size:20px;font-weight:500;line-height:28px}
 .emc-intro{margin:4px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}
-.emc-head-side{display:flex;align-items:center;gap:8px;flex:none;padding-top:2px}
+.emc-head-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none;padding-top:2px}
+.emc-restart-status{max-width:260px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:12px}
 .emc-tabs{max-width:none;margin:16px 0 0;display:flex;gap:22px;border-bottom:.5px solid var(--dsw-alias-border-l3)}
 .emc-tab{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;
   font-size:13.5px;line-height:20px;padding:8px 0 10px;cursor:pointer;position:relative;white-space:nowrap}
@@ -4479,6 +4492,10 @@ window.__ModuleLoader__.load({
       const [health, setHealth] = useState(null)
       const [status, setStatus] = useState(null)
       const [offline, setOffline] = useState(false)
+      const [restartState, setRestartState] = useState('')
+      const [restartPending, setRestartPending] = useState(false)
+      const [confirmRestart, setConfirmRestart] = useState(false)
+      const restartRef = useRef(null)
       const [toast, notify] = useToast(t)
 
       useEffect(() => {
@@ -4490,6 +4507,13 @@ window.__ModuleLoader__.load({
             if (!alive) return
             setHealth(nextHealth)
             setOffline(false)
+            const pending = restartRef.current
+            if (pending && nextHealth.instance_id && nextHealth.instance_id !== pending.instanceId) {
+              restartRef.current = null
+              setRestartPending(false)
+              setRestartState(t('服务已重启'))
+              setStatus(null)
+            }
           } catch {
             if (!alive) return
             setHealth(null)
@@ -4513,6 +4537,37 @@ window.__ModuleLoader__.load({
         return () => { alive = false; if (timer) clearTimeout(timer) }
       }, [])
 
+      const requestRestart = async () => {
+        setConfirmRestart(false)
+        if (restartPending || !health || !health.instance_id) return
+        const pending = { instanceId: health.instance_id }
+        restartRef.current = pending
+        setRestartPending(true)
+        setRestartState(t('正在请求重启…'))
+        try {
+          await api('restart', {})
+          if (restartRef.current === pending) setRestartState(t('正在等待服务重启…'))
+        } catch (error) {
+          if (restartRef.current !== pending) return
+          if (error.status && error.status < 500) {
+            restartRef.current = null
+            setRestartPending(false)
+            setRestartState(String(error.message))
+            return
+          }
+          // A dropped connection may mean the restart started before the response arrived.
+          setRestartState(t('重启请求未完成，请检查服务状态。') + (error.message ? ' ' + error.message : ''))
+        }
+        if (restartRef.current !== pending) return
+        setTimeout(() => {
+          if (restartRef.current !== pending) return
+          restartRef.current = null
+          setRestartPending(false)
+          setRestartState(t('暂未确认服务重启，请检查服务状态。'))
+        }, 120000)
+      }
+      useEffect(() => () => { restartRef.current = null }, [])
+
       const tabs = [
         ['overview', t('概览')],
         ['backends', t('后端')],
@@ -4530,9 +4585,21 @@ window.__ModuleLoader__.load({
               h('h1', { className: 'emc-title' }, t('记忆后台')),
               h('p', { className: 'emc-intro' }, t('eventmem daemon 的记忆运维台：概览、后端链路、模型、连边调度与日志。'))),
             h('div', { className: 'emc-head-side' },
-              h(Pill, { ok: !offline },
-                offline ? t('daemon 不可达')
-                  : `ok${health && health.schema !== undefined ? ' · schema ' + health.schema : ''}${health && health.pid ? ' · pid ' + health.pid : ''}`))),
+              h(Pill, { ok: !!health && !offline },
+                offline ? t('daemon 不可达') : !health ? t('连接中…')
+                  : `ok${health.schema !== undefined ? ' · schema ' + health.schema : ''}${health.pid ? ' · pid ' + health.pid : ''}`),
+              h(Btn, { disabled: offline || !health || !health.instance_id || restartPending,
+                onClick: () => setConfirmRestart(true) }, t('重启服务')),
+              restartState ? h('div', { className: 'emc-restart-status', role: 'status', 'aria-live': 'polite' }, restartState) : null)),
+          confirmRestart ? h('div', { className: 'emc-modal-backdrop', onClick: () => setConfirmRestart(false) },
+            h('div', { className: 'emc-modal', role: 'dialog', 'aria-modal': true,
+              'aria-label': t('重启服务'), onClick: (event) => event.stopPropagation(),
+              onKeyDown: (event) => { if (event.key === 'Escape') setConfirmRestart(false) } },
+              h('p', null, t('重启 eventmem 服务？服务将短暂不可用，正在进行的任务会先结束。')),
+              h('div', { className: 'acts' },
+                h('button', { type: 'button', className: 'emc-btn', autoFocus: true,
+                  onClick: () => setConfirmRestart(false) }, t('取消')),
+                h('button', { type: 'button', className: 'emc-btn danger', onClick: requestRestart }, t('重启服务'))))) : null,
           h('div', { className: 'emc-tabs', role: 'tablist', 'aria-label': t('记忆后台') },
             tabs.map(([key, label]) =>
               h('button', {

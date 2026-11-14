@@ -21,7 +21,7 @@ const GET_ROUTES = [
 
 /** POST routes the console page actually calls. */
 const POST_ROUTES = [
-  /^pause$/, /^stop$/, /^switch$/, /^notices\/clear$/, /^edges\/clear$/, /^config$/, /^packs$/,
+  /^pause$/, /^stop$/, /^switch$/, /^restart$/, /^notices\/clear$/, /^edges\/clear$/, /^config$/, /^packs$/,
   /^packs\/[A-Za-z0-9._-]+\/(config|delete)$/,
   /^backends\/[A-Za-z0-9._-]+\/(probe|start|stop)$/,
   /^install$/,

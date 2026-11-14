@@ -37,6 +37,7 @@ Routes::
     POST /api/install                download runtime + model into a new pack (a job)
     GET  /api/job                    the install job's state
     GET  /api/logs                   this process's recent log lines
+    POST /api/restart                gracefully restart this standalone daemon (202 accepted)
     POST /api/run-once               run one pass now (409 if one is already running)
     GET  /api/runs                   the last few pass results
     -- data plane (a thin mirror of EventMem, for a host on another machine) --
@@ -71,8 +72,11 @@ import mimetypes
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -135,6 +139,10 @@ class Daemon:
         self.settings = settings
         self.packs_root = str(packs_root or getattr(settings.decision, "packs_dir", "") or "")
         self.started = time.time()
+        self.instance_id = uuid.uuid4().hex
+        self._restart_lock = threading.Lock()
+        self._restart_requested = threading.Event()
+        self._restart_enabled = False
         self._pass_lock = threading.Lock()
         self._config_lock = threading.RLock()
         #: 数据面：长驻 EventMem + 每会话的 RecallState。管理与数据面共用一把锁，
@@ -412,6 +420,7 @@ class Daemon:
         return {
             "status": "ok",
             "pid": os.getpid(),
+            "instance_id": self.instance_id,
             "db": self.settings.db_path,
             "schema": SCHEMA_VERSION,
             "uptime": round(time.time() - self.started, 1),
@@ -1347,6 +1356,14 @@ class Daemon:
         if tail[:1] == ["mem"]:
             return self.data_plane(method, tail[1:], body)
 
+        if method == "POST" and tail == ["restart"]:
+            with self._restart_lock:
+                if not self._restart_enabled:
+                    return 503, {"error": "restart is unavailable in this hosting mode"}
+                if self._restart_requested.is_set():
+                    return 409, {"error": "restart already in progress"}
+                self._restart_requested.set()
+            return 202, {"ok": True, "restarting": True, "instance_id": self.instance_id}
         if method == "GET" and tail == ["health"]:
             return 200, self.health()
         if method == "GET" and tail == ["status"]:
@@ -1450,6 +1467,12 @@ def _probe_of(pack: Pack):
 
 # --------------------------------------------------------------------------- http
 
+class _DrainServer(ThreadingHTTPServer):
+    # server_close joins all request threads, so no database writes are abandoned at restart.
+    daemon_threads = False
+    block_on_close = True
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "eventmem-daemon/1"
     daemon: Daemon  # set by make_server
@@ -1492,17 +1515,34 @@ class _Handler(BaseHTTPRequestHandler):
         if method == "GET" and not path.startswith("/api/"):
             return self._serve_static(path)
 
+        parts = [part for part in path.split("/") if part]
+        is_restart = parts == ["api", "restart"]
+        # A browser on another site must not be able to restart a loopback service via a
+        # simple cross-origin form POST. Non-browser clients and trusted local proxies omit Origin.
+        if method == "POST" and is_restart:
+            origin = self.headers.get("Origin")
+            if origin and (urlsplit(origin).scheme not in ("http", "https") or
+                           urlsplit(origin).netloc.lower() != self.headers.get("Host", "").lower()):
+                return self._send_json(403, {"error": "cross-origin restart forbidden"})
         try:
             body = self._read_body() if method in ("POST", "PUT") else None
         except (ValueError, UnicodeDecodeError):
             return self._send_json(400, {"error": "请求体不是合法 JSON"})
 
-        parts = [part for part in path.split("/") if part]
         try:
-            status, payload = self.daemon.route(method, parts, body)
+            if self.daemon._restart_requested.is_set() and not is_restart:
+                status, payload = 503, {"error": "restart in progress"}
+            else:
+                status, payload = self.daemon.route(method, parts, body)
         except Exception as exc:  # noqa: BLE001 - never leak a traceback to the client
             status, payload = 500, {"error": f"{type(exc).__name__}: {exc}"}
-        self._send_json(status, payload)
+        try:
+            self._send_json(status, payload)
+        finally:
+            if is_restart and status == 202:
+                # Only wake the lifecycle after the acceptance response has been attempted.
+                self.daemon._stop.set()
+                self.daemon._wake.set()
 
     def _serve_static(self, path: str) -> None:
         """``/`` and ``/ui/…`` out of :data:`UI_DIR`; nothing else is reachable."""
@@ -1524,8 +1564,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 def make_server(daemon: Daemon, host: str = "127.0.0.1", port: int = API_PORT):
     handler = type("BoundHandler", (_Handler,), {"daemon": daemon})
-    server = ThreadingHTTPServer((host, int(port)), handler)
-    server.daemon_threads = True
+    server = _DrainServer((host, int(port)), handler)
     return server
 
 
@@ -1596,7 +1635,11 @@ def serve(daemon: Daemon, *, host: str = "127.0.0.1", port: int = API_PORT,
     finally:
         daemon._stop.set()
         server.shutdown()
-        server.server_close()
+        server.server_close()  # drain all HTTP requests before closing their shared resources
+        for background in (daemon._job_thread, daemon._backfill_thread):
+            if background is not None:
+                background.join()
+        daemon.close_mem()
 
 
 def main(argv: Optional[list[str]] = None, *, settings: Optional[CoreSettings] = None,
@@ -1635,7 +1678,23 @@ def main(argv: Optional[list[str]] = None, *, settings: Optional[CoreSettings] =
         _log.error("eventmem daemon: another daemon already owns %s", st.db_path)
         return 1
     _log.info("eventmem daemon: db=%s packs=%s", st.db_path, daemon.packs_root)
+    # orig_argv preserves -I, -m and interpreter options that sys.argv drops. Embedded
+    # interpreters cannot reliably reconstruct an entry point and must not offer restart.
+    original = getattr(sys, "orig_argv", None)
+    daemon._restart_enabled = bool(original and len(original) > 1 and sys.executable)
     serve(daemon, host=args.host, port=args.port, poll=args.poll)
+    if daemon._restart_requested.is_set():
+        if lock is not NO_GUARD:
+            os.close(lock)
+        try:
+            argv = [sys.executable, *original[1:]]
+            # Windows CRT spawnv does not quote argv elements itself.
+            if os.name == "nt":
+                argv = [subprocess.list2cmdline([arg]) for arg in argv]
+            os.execv(sys.executable, argv)
+        except OSError:
+            _log.exception("eventmem daemon: restart failed after shutdown")
+            return 1
     return 0
 
 

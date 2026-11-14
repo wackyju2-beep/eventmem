@@ -35,7 +35,7 @@ const allowed = [
   ['GET', 'health'], ['GET', 'status'], ['GET', 'stats'], ['GET', 'config'],
   ['GET', 'logs'], ['GET', 'packs'], ['GET', 'models'], ['GET', 'job'],
   ['GET', 'mem/graph'],
-  ['POST', 'pause'], ['POST', 'stop'], ['POST', 'switch'],
+  ['POST', 'pause'], ['POST', 'stop'], ['POST', 'switch'], ['POST', 'restart'],
   ['POST', 'config'], ['POST', 'notices/clear'], ['POST', 'edges/clear'],
   ['POST', 'packs'], ['POST', 'packs/lev/config'], ['POST', 'packs/lev/delete'],
   ['POST', 'backends/lev/probe'], ['POST', 'backends/lev/start'], ['POST', 'backends/lev/stop'],
