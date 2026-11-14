@@ -1746,6 +1746,10 @@ function LiveBar({ ctx, notify }) {
         ? jsxs('div', {
             className: 'emg-row',
             children: [
+              // The +N flash goes FIRST: the group is right-anchored (the grow before it
+              // takes the slack), so a chip that appears at the end pushes 对/边 left and
+              // back on every pair. In front of them, the numbers never move.
+              flash ? jsx('span', { className: 'emg-plus', key: flash.at, children: `+${flash.n}` }) : null,
               jsx('span', {
                 className: 'emg-count',
                 children: jsxs('span', { children: [jsx(FlipDigits, { value: pairs }), ` ${t('对')}`] })
@@ -1754,7 +1758,6 @@ function LiveBar({ ctx, notify }) {
                 className: 'emg-count',
                 children: jsxs('span', { children: [jsx(FlipDigits, { value: edges }), ` ${t('边')}`] })
               }),
-              flash ? jsx('span', { className: 'emg-plus', key: flash.at, children: `+${flash.n}` }) : null,
               jsx('span', { className: 'emg-sub', children: dur(elapsed) })
             ]
           })
