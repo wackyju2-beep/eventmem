@@ -74,16 +74,18 @@ const CSS = `
    anchored top-left it drifts away from the projected point and the edges then miss it. */
 .em-atom-body{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden;box-sizing:border-box;
   pointer-events:auto;cursor:pointer;
-  width:calc(20px + 156px * var(--m,0));height:calc(20px + 36px * var(--m,0));
+  /* 三段连续形态：--f 0→1 把 20px 小球收成 6px 实心点（远景只留颜色），--m 0→1 再把点长成卡片。 */
+  width:calc((20px - 14px * var(--f,0)) + 156px * var(--m,0));
+  height:calc((20px - 14px * var(--f,0)) + 36px * var(--m,0));
   border-radius:calc(10px - var(--m,0) * 1px);
-  background:var(--ui-bg-card);
+  background:color-mix(in srgb,var(--em-kind-color,var(--ui-text-secondary)) calc(var(--f,0) * 100%),var(--ui-bg-card));
   border-style:solid;
   border-color:color-mix(in srgb,var(--em-kind-color,var(--ui-text-secondary)) calc((1 - var(--m,0)) * 100%),var(--ui-stroke-secondary));
   border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));border-left-color:var(--em-kind-color,var(--ui-text-secondary));
   box-shadow:0 2px 8px color-mix(in srgb,var(--ui-base) 30%,transparent)}
 .em-atom-num{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
   font:700 8px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
-  opacity:calc(1 - var(--m,0));pointer-events:none}
+  opacity:calc((1 - var(--m,0)) * (1 - var(--f,0)));pointer-events:none}
 .em-atom-card{position:absolute;left:0;top:0;width:176px;height:56px;box-sizing:border-box;
   padding:5px 9px;pointer-events:none;opacity:clamp(0,calc((var(--m,0) - 0.5) * 2.4),1)}
 .em-atom[data-kind="决定"] .em-atom-body{--em-kind-color:#7ea9e0}
@@ -245,6 +247,21 @@ const CSS = `
 .em-chip:hover{background:var(--chrome-action-hover);color:var(--ui-text-primary)}
 .em-chip-inner{display:inline-flex;align-items:center;gap:4px}
 .em-chip-glyph{color:var(--ui-accent);font-size:12px;line-height:1}
+/* 框选（右键长按）：屏幕矩形的叠加层，只负责画，不接指针。 */
+.em-lasso{position:absolute;left:0;top:0;display:none;pointer-events:none;z-index:33000;border-radius:2px;
+  border:1px dashed color-mix(in srgb,var(--ui-accent) 78%,transparent);
+  background:color-mix(in srgb,var(--ui-accent) 10%,transparent)}
+/* 框选出来的多选：和「选中」分开一个视觉，否则看不出这是批量选择。 */
+.em-atom[data-multi="1"] .em-atom-body{box-shadow:0 0 0 1.5px color-mix(in srgb,var(--ui-accent) 88%,transparent),
+  0 0 0 4px color-mix(in srgb,var(--ui-accent) 16%,transparent),0 2px 8px color-mix(in srgb,var(--ui-base) 30%,transparent)}
+.em-batch{position:absolute;left:10px;bottom:44px;width:318px;max-width:calc(100% - 20px);z-index:42000;
+  padding:10px 12px;border-radius:10px;display:grid;gap:8px;
+  background:color-mix(in srgb,var(--ui-bg-elevated,var(--ui-bg-secondary,#202329)) 96%,transparent);
+  border:1px solid color-mix(in srgb,var(--ui-stroke-secondary) 80%,transparent);
+  box-shadow:0 18px 40px #0005}
+.em-batch-head{display:flex;align-items:center;gap:8px}
+.em-batch-title{font-weight:650}
+.em-batch-sub{font-size:10.5px;color:var(--ui-text-quaternary);font-variant-numeric:tabular-nums}
 `
 
 // --------------------------------------------------------------------------- helpers
@@ -253,6 +270,26 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 const smoothstep = (e0, e1, x) => {
   const t = clamp((x - e0) / (e1 - e0), 0, 1)
   return t * t * (3 - 2 * t)
+}
+
+// 右键按住多久才进框选：短于一瞬的右键是误触（右键菜单已被屏蔽），拖出 4px 也会取消。
+const LASSO_HOLD_MS = 320
+
+// 远景收缩：eye 到原子的距离 / 参考视距。rel 小 = 很远。0 → 彩色点，1 → 正常小球。
+// 和 baseMorph 用的是同一个 rel，所以「球→卡」与「点→球」两块区域天然不重叠。
+const farFactor = rel => 1 - smoothstep(0.12, 0.28, rel)
+
+// 屏幕矩形框选：只挑当前真的看得见的原子（相机前方、没被筛选压掉），判据是投影中心落在框内。
+// 纯函数，测试里直接钉（tests/test_graph_lasso.cjs）。
+const lassoPick = (positions, rect) => {
+  const ids = []
+  for (const [id, p] of positions) {
+    if (!p || !p.el) continue
+    if (!(p.visibility > 0.5) || !(p.depth > 0.35)) continue
+    if (p.x < rect.x0 || p.x > rect.x1 || p.y < rect.y0 || p.y > rect.y1) continue
+    ids.push(id)
+  }
+  return ids.sort((a, b) => a - b)
 }
 
 // 世界单位只由相机距离定义：START_DIST 是默认视距，FOCUS_DIST 是"拉到眼前"后的视距。
@@ -792,6 +829,7 @@ function Scene({
   scene,
   focusInfo,
   sel,
+  multi,
   focusReq,
   showLabels,
   camRef,
@@ -799,6 +837,7 @@ function Scene({
   onSelectAtom,
   onSelectEdge,
   onBackground,
+  onLasso,
   onMoved
 }) {
   const stageRef = useRef(null)
@@ -806,6 +845,9 @@ function Scene({
   const atomEls = useRef(new Map())
   const backRef = useRef(null)
   const frontRef = useRef(null)
+  const lassoElRef = useRef(null)
+  // 上一帧每颗原子的屏幕位置：框选就用它做命中，和画出来的东西是同一份数据。
+  const screenRef = useRef(new Map())
   const haloRef = useRef('#0f1115')
   // 选中时只留焦点邻域，其余原子整个收起来；按 (选择, 过滤器, 场景) 身份缓存。
   const visRef = useRef({ key: '', fi: null, scene: null, set: null })
@@ -823,7 +865,10 @@ function Scene({
   const sceneRef = useRef(scene)
   sceneRef.current = scene
   const handlersRef = useRef({})
-  handlersRef.current = { onSelectAtom, onSelectEdge, onBackground, onMoved }
+  handlersRef.current = { onSelectAtom, onSelectEdge, onBackground, onLasso, onMoved }
+  const multiRef = useRef(multi)
+  multiRef.current = multi
+  const lassoRef = useRef({ timer: 0, armed: false, x0: 0, y0: 0, pointerId: 0, box: null })
   const focusRef = useRef(focusInfo)
   focusRef.current = focusInfo
   const selRef = useRef(sel)
@@ -1106,11 +1151,13 @@ function Scene({
         el.style.pointerEvents = opacity > 0.5 && (!shown || shown.has(atom.id) || (selNow && selNow.type === 'atom' && visibility > 0.5)) ? '' : 'none'
         el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%)`
         el.dataset.selected = isSelAtom ? '1' : '0'
+        el.dataset.multi = multiRef.current && multiRef.current.has(atom.id) ? '1' : '0'
         el.style.zIndex = isSelAtom ? '34000' : String(Math.round(20000 - p.z * 100))
       }
 
       // 卡片预算：钻进云团时把最近的一批变成卡片，更远的继续当小球，
       // 否则几百张卡会互相压住。（排名变化是连续的，过渡带也做了衰减，不会跳。）
+      screenRef.current = positions
       const CARD_BUDGET = 46
       const ranked = []
       for (const [id, p] of positions) if (p && p.el) {
@@ -1118,11 +1165,16 @@ function Scene({
         p.w = 20
         p.h = 20
         if (p.stable.depth > 0.35 && p.stable.x >= -88 && p.stable.x <= w + 88 && p.stable.y >= -28 && p.stable.y <= h + 28) ranked.push(p)
-        else p.el.style.setProperty('--m', '0')
+        else {
+          p.el.style.setProperty('--m', '0')
+          p.el.style.setProperty('--f', farFactor(startDist / Math.max(p.distance, 0.01)).toFixed(3))
+        }
       }
       ranked.sort((a, b) => a.distance - b.distance)
       for (let i = 0; i < ranked.length; i += 1) {
         const p = ranked[i]
+        // 远景收缩与球→卡共用同一个 rel：rel 越小（离得越远）越接近「一点颜色」。
+        p.far = farFactor(startDist / Math.max(p.distance, 0.01))
         p.baseMorph = smoothstep(0.3, 0.72, clamp(startDist / Math.max(p.distance, 0.01), 0.26, 1.06))
         if (i >= CARD_BUDGET) p.baseMorph *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
       }
@@ -1136,9 +1188,12 @@ function Scene({
           m *= 1 - priority * smoothstep(0.1, 0.5, q.baseMorph) * (1 - smoothstep(0.55, 1.08, separation))
         }
         p.m = m
-        p.w = 20 + 156 * m
-        p.h = 20 + 36 * m
+        // 连线的锚点必须用和 CSS 同一套尺寸：小球基数 20px 随 --f 收到 6px，卡片再按 --m 长。
+        const base = 20 - 14 * p.far
+        p.w = base + 156 * m
+        p.h = base + 36 * m
         p.el.style.setProperty('--m', m.toFixed(3))
+        p.el.style.setProperty('--f', p.far.toFixed(3))
       }
 
       // ---- edges, on canvas -------------------------------------------------
@@ -1446,13 +1501,59 @@ function Scene({
     if (ids.length) handlersRef.current.onMoved(ids)
   }, [camRef])
 
+  // 框选的矩形只是纯视觉：直接写 style，不走 React state，免得每帧重渲染。
+  const paintLasso = (x0, y0, x1, y1) => {
+    const el = lassoElRef.current
+    if (!el) return
+    const left = Math.min(x0, x1)
+    const top = Math.min(y0, y1)
+    el.style.display = 'block'
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+    el.style.width = `${Math.abs(x1 - x0)}px`
+    el.style.height = `${Math.abs(y1 - y0)}px`
+  }
+  const hideLasso = () => {
+    const el = lassoElRef.current
+    if (el) el.style.display = 'none'
+  }
+
   const onPointerDown = useCallback(
     e => {
-      const pan = e.button === 1
-      if (e.button !== 0 && !pan) return
+      // 左键拖空白 = 平移相机；中键拖 = 转视角；左键按在原子 = 拖那颗原子；右键长按 = 框选。
+      const rotate = e.button === 1
+      if (e.button !== 0 && !rotate && e.button !== 2) return
       e.preventDefault()
       const cam = camRef.current
       movedRef.current = 0
+
+      if (e.button === 2) {
+        // 先按住不动，够 LASSO_HOLD_MS 才进框选；期间移动超过 4px 就当作误触取消。
+        const lasso = lassoRef.current
+        clearTimeout(lasso.timer)
+        lasso.armed = false
+        lasso.box = null
+        lasso.x0 = e.clientX
+        lasso.y0 = e.clientY
+        lasso.pointerId = e.pointerId
+        lasso.timer = setTimeout(() => {
+          lasso.timer = 0
+          const stage = stageRef.current
+          if (!stage) return
+          const box = stage.getBoundingClientRect()
+          lasso.box = box
+          lasso.armed = true
+          dragRef.current = { mode: 'lasso', x0: lasso.x0 - box.left, y0: lasso.y0 - box.top }
+          try {
+            stage.setPointerCapture(lasso.pointerId)
+          } catch {
+            /* ignore */
+          }
+          paintLasso(lasso.x0 - box.left, lasso.y0 - box.top, lasso.x0 - box.left, lasso.y0 - box.top)
+        }, LASSO_HOLD_MS)
+        return
+      }
+
       const card = e.button === 0 && e.target && e.target.closest ? e.target.closest('.em-atom') : null
       if (card && card.dataset.id) {
         const id = Number(card.dataset.id)
@@ -1481,7 +1582,7 @@ function Scene({
         }
       }
       dragRef.current = {
-        mode: pan ? 'pan' : 'rotate',
+        mode: rotate ? 'rotate' : 'pan',
         x: e.clientX,
         y: e.clientY,
         yaw: cam.yaw,
@@ -1491,7 +1592,7 @@ function Scene({
       }
       // Capture retargets the following `click` at the stage, which would swallow every card
       // click. Background drags capture; a drag that starts on a card keeps the card's click.
-      if (!pan) {
+      if (!rotate) {
         try {
           e.currentTarget.setPointerCapture(e.pointerId)
         } catch {
@@ -1504,8 +1605,20 @@ function Scene({
 
   const onPointerMove = useCallback(
     e => {
+      // 右键还没按住够时长就动了 → 当误触，别再进框选。
+      const lasso = lassoRef.current
+      if (lasso.timer && !lasso.armed &&
+          Math.hypot(e.clientX - lasso.x0, e.clientY - lasso.y0) > 4) {
+        clearTimeout(lasso.timer)
+        lasso.timer = 0
+      }
       const drag = dragRef.current
       if (!drag) return
+      if (drag.mode === 'lasso') {
+        if (!lasso.box) return
+        paintLasso(drag.x0, drag.y0, e.clientX - lasso.box.left, e.clientY - lasso.box.top)
+        return
+      }
       const dx = e.clientX - drag.x
       const dy = e.clientY - drag.y
       movedRef.current = Math.max(movedRef.current, Math.hypot(dx, dy))
@@ -1557,8 +1670,39 @@ function Scene({
   )
 
   const onPointerUp = useCallback(e => {
+    const lasso = lassoRef.current
+    if (lasso.timer) {
+      clearTimeout(lasso.timer)
+      lasso.timer = 0
+    }
     const drag = dragRef.current
     dragRef.current = null
+    if (drag && drag.mode === 'lasso') {
+      hideLasso()
+      const box = lasso.box
+      if (box && lasso.armed) {
+        const x = e.clientX - box.left
+        const y = e.clientY - box.top
+        const rect = {
+          x0: Math.min(drag.x0, x),
+          x1: Math.max(drag.x0, x),
+          y0: Math.min(drag.y0, y),
+          y1: Math.max(drag.y0, y)
+        }
+        // 太小的框是误触：不当成「全不选」，直接不动选区。
+        if (rect.x1 - rect.x0 > 3 && rect.y1 - rect.y0 > 3) {
+          handlersRef.current.onLasso(lassoPick(screenRef.current, rect))
+        }
+      }
+      lasso.armed = false
+      lasso.box = null
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
     if (drag && drag.mode === 'atom' && movedRef.current > 4) handlersRef.current.onMoved([drag.id])
     try {
       e.currentTarget.releasePointerCapture(e.pointerId)
@@ -1655,6 +1799,8 @@ function Scene({
       if (e.button === 1) e.preventDefault()
     },
     onAuxClick: e => e.preventDefault(),
+    // 右键是框选手势，不能弹出上下文菜单。
+    onContextMenu: e => e.preventDefault(),
     onClick: e => {
       if (movedRef.current > 5) return
       if (e.target !== e.currentTarget) return
@@ -1690,7 +1836,8 @@ function Scene({
     children: [
       jsx('div', { className: 'em-atom-layer', children: atomsTree }),
       jsx('canvas', { ref: backRef, className: 'em-edges em-edge-back' }),
-      jsx('canvas', { ref: frontRef, className: 'em-edges em-edges-front' })
+      jsx('canvas', { ref: frontRef, className: 'em-edges em-edges-front' }),
+      jsx('div', { ref: lassoElRef, className: 'em-lasso' })
     ]
   })
 }
@@ -1930,6 +2077,108 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
   })
 }
 
+function BatchPanel({ ids, projects, ctx, onDone, onClose }) {
+  const [project, setProject] = useState('')
+  const [kind, setKind] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+
+  const projectSelect = useMemo(
+    () => [
+      { value: '', label: '— 不改项目 —' },
+      { value: '__none__', label: '未归类（清空项目）' },
+      ...(projects || []).filter(p => p.status !== 'archived').map(p => ({ value: p.name, label: p.name }))
+    ],
+    [projects]
+  )
+  const kindSelect = useMemo(() => [{ value: '', label: '— 不改类型 —' }, ...KINDS.map(k => ({ value: k, label: k }))], [])
+  const dirty = Boolean(project || kind)
+
+  const apply = async () => {
+    if (!dirty || busy) return
+    setBusy(true)
+    setErr('')
+    setNote('')
+    try {
+      const body = { ids }
+      if (project) body.project = project === '__none__' ? null : project
+      if (kind) body.kind = kind
+      const res = await ctx.rest('/events/batch', { method: 'POST', body })
+      const v = res?.vector || {}
+      const bits = [`已改 ${res?.updated ?? ids.length} 条`]
+      if (v.updated || v.skipped) {
+        bits.push(v.skipped
+          ? `向量 ${v.updated} 条重算 / ${v.skipped} 条跳过（${v.note || '原因未知'}）`
+          : `向量 ${v.updated} 条已重算`)
+      }
+      if (res?.cross) bits.push(`跨项目标记 ${res.cross} 条已修正`)
+      bits.push(res?.reseat
+        ? '已标记重算候选边：下一轮连边会从最早的这条之前开始，判过的对不再问'
+        : '候选边不用重算：游标已经在这批事件之前')
+      if (res?.missing?.length) bits.push(`${res.missing.length} 条不存在，已跳过`)
+      setNote(bits.join(' · '))
+      setProject('')
+      setKind('')
+      await onDone()
+    } catch (e) {
+      setErr(String(e?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return jsxs('div', {
+    className: 'em-batch',
+    children: [
+      jsxs('div', {
+        className: 'em-batch-head',
+        children: [
+          jsx('span', { className: 'em-batch-title', children: '批量编辑' }),
+          jsx('span', { className: 'em-batch-sub', children: `${ids.length} 个原子` }),
+          jsx('button', { type: 'button', className: 'em-x', onClick: onClose, title: '取消选择', children: '✕' })
+        ]
+      }),
+      jsxs('label', {
+        className: 'em-field',
+        children: [
+          jsx('span', { className: 'em-label', children: '所属项目' }),
+          jsx(GraphSelect, { value: project, onChange: setProject, options: projectSelect })
+        ]
+      }),
+      jsxs('label', {
+        className: 'em-field',
+        children: [
+          jsx('span', { className: 'em-label', children: '类型' }),
+          jsx(GraphSelect, { value: kind, onChange: setKind, options: kindSelect })
+        ]
+      }),
+      err ? jsx('div', { className: 'em-error', children: err }) : null,
+      note ? jsx('div', { className: 'em-hintline', children: note }) : null,
+      jsxs('div', {
+        className: 'em-actions',
+        children: [
+          jsx(Button, {
+            size: 'sm',
+            variant: 'default',
+            disabled: busy || !dirty,
+            onClick: apply,
+            children: busy ? '应用中…' : '应用'
+          }),
+          jsx('span', {
+            className: 'em-hint',
+            children: dirty ? '改项目会重算向量与跨项目标记；已有的边一条不删' : '选项目或类型后应用'
+          })
+        ]
+      }),
+      jsx('div', {
+        className: 'em-hint',
+        children: `编号：${ids.slice(0, 12).join('、')}${ids.length > 12 ? ' …' : ''}`
+      })
+    ]
+  })
+}
+
 function EdgeInspector({ edge, scene, data, ctx, onSaved, onSelectAtom, onClose }) {
   const [rel, setRel] = useState(edge.rel || '')
   const [busy, setBusy] = useState(false)
@@ -2074,6 +2323,8 @@ function GraphPage({ ctx }) {
   const [semBusy, setSemBusy] = useState(false)
   const [pulled, setPulled] = useState(() => new Set())
   const [sel, setSel] = useState(null)
+  // 右键框选出来的批量选择：和「选中（检查器）」是两套东西，互不覆盖。
+  const [multi, setMulti] = useState(() => new Set())
   const [focusReq, setFocusReq] = useState(null)
   const [layoutEpoch, setLayoutEpoch] = useState(0)
   const seqRef = useRef(0)
@@ -2271,6 +2522,7 @@ function GraphPage({ ctx }) {
   const patch = useCallback(update => {
     setFilters(prev => ({ ...prev, ...update }))
     setSel(null)
+    setMulti(new Set())
   }, [])
 
   const clearAll = useCallback(() => {
@@ -2280,6 +2532,7 @@ function GraphPage({ ctx }) {
     setMode('only')
     setPulled(new Set())
     setSel(null)
+    setMulti(new Set())
   }, [])
 
   const clearSemantic = useCallback(() => {
@@ -2415,6 +2668,7 @@ function GraphPage({ ctx }) {
     posRef.current = new Map()
     pendingRef.current.clear()
     setSel(null)
+    setMulti(new Set())
     setLayoutEpoch(e => e + 1)
     resetView()
   }, [ctx, resetView])
@@ -2422,6 +2676,8 @@ function GraphPage({ ctx }) {
   const selectedAtom = sel?.type === 'atom' ? scene?.byId.get(sel.id) : null
   const selectedEdge =
     sel?.type === 'edge' ? scene?.edges.find(e => e.key === sel.key) || rawScene?.edges.find(e => e.key === sel.key) : null
+  // 框选之后图可能已经刷新：面板只认还在这张图里的原子。
+  const multiIds = [...multi].filter(id => scene && scene.byId.has(id)).sort((a, b) => a - b)
 
   if (isLoading) {
     return jsx('div', {
@@ -2459,6 +2715,7 @@ function GraphPage({ ctx }) {
         scene,
         focusInfo: filterInfo,
         sel,
+        multi,
         focusReq,
         showLabels,
         camRef,
@@ -2466,7 +2723,15 @@ function GraphPage({ ctx }) {
         onMoved,
         onSelectAtom: selectAtom,
         onSelectEdge: selectEdge,
-        onBackground: () => setSel(null)
+        onLasso: ids => {
+          setSel(null)
+          setMulti(new Set(ids))
+          haptic('tap')
+        },
+        onBackground: () => {
+          setSel(null)
+          setMulti(new Set())
+        }
       }),
 
       jsxs('div', {
@@ -2634,6 +2899,17 @@ function GraphPage({ ctx }) {
             onSaved,
             onSelectEdge: e => selectEdge(e, true),
             onClose: () => setSel(null)
+          })
+        : null,
+      multiIds.length
+        ? jsx(BatchPanel, {
+            ids: multiIds,
+            projects: data.projects || [],
+            ctx,
+            onDone: async () => {
+              await onSaved()
+            },
+            onClose: () => setMulti(new Set())
           })
         : null,
       selectedEdge

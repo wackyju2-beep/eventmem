@@ -278,11 +278,14 @@ route of its own any more — it only hands its 3D view to the console).
 
 | action | result |
 |---|---|
-| left-drag empty space / wheel | orbit / zoom |
-| middle-drag | pan |
-| click a box | camera flies to it, box pulled forward; edit kind and text on the right |
+| left-drag empty space | pan the camera |
+| middle-drag | orbit |
+| right-hold then drag | rubber-band select: every visible atom whose centre falls inside the box |
+| wheel | move along the view (rolling far out turns the balls into coloured dots with no numbers) |
+| click a box | camera flies to it, box pulled forward; edit kind, text and project on the right |
 | click an edge | endpoints pulled to the left and right of the screen; distribution, edit, delete |
 | left-drag a box | put it anywhere; positions survive a refresh |
+| a rubber-band selection | batch panel: set project and/or kind for all of them at once; existing edges are never deleted, candidates are re-selected (already-judged pairs are never asked twice) |
 | click empty space | drops focus only, nothing snaps back |
 | filter | project / session / date / kind / edge relation / exact id / semantic embedding search — every criterion ANDs together; either the matches, or the matches plus one-hop neighbours |
 

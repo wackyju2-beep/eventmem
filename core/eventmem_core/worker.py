@@ -101,6 +101,17 @@ def run_once(settings: CoreSettings, *, ensure: bool = True,
                 settings.edges.first_run_hours) * 3600.0
         except (TypeError, ValueError):
             cursor = time.time() - float(settings.edges.first_run_hours) * 3600.0
+        # 人工批量改过项目/类型 → 图谱留下 reseat 标记：这一轮要从更早的地方开始，按**新**项目
+        # 重选候选。只回退、不前进；判过的对在 pair_evals 里，选候选时就跳过了，不花模型时间。
+        raw_reseat = store.get_meta(N.RESEAT_KEY)
+        reseat = 0.0
+        if raw_reseat:
+            try:
+                reseat = float(raw_reseat)
+            except (TypeError, ValueError):
+                reseat = 0.0
+        if 0 < reseat < cursor:
+            cursor = reseat
         if store.count_events_since(cursor) <= 0:
             return {"skipped": "idle", "events": 0}
         if prepare is not None:
@@ -124,6 +135,9 @@ def run_once(settings: CoreSettings, *, ensure: bool = True,
         if result.get("skipped") not in ("jev-unavailable", "jev-error", "stopped"):
             # 高水位：手工 nightly 或第二个实例同时跑时，先开始的 pass 后结束也不能把游标改回去。
             store.advance_meta_ts(N.CURSOR_KEY, run_start - 120.0)
+            # 这一轮确实从 reseat 点开始跑了 → 标记作废；用 CAS 清，避免抹掉期间新写的标记。
+            if reseat > 0 and cursor == reseat and raw_reseat:
+                store.clear_meta_if(N.RESEAT_KEY, raw_reseat)
         return result
     finally:
         store.close()

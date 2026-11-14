@@ -27,6 +27,8 @@ router = APIRouter()
 KINDS = ("决定", "尝试", "结果", "变更", "教训")
 RELS = ("改变", "否定", "重复", "因为", "细化")
 MAX_TEXT = 500
+#: 一次批量编辑最多碰多少条事件（右键框选的现实上限，也是别把单次事务拖成分钟级）。
+MAX_BATCH = 500
 
 #: ``core/`` sits four levels up from this file when the plugin is a symlink into the
 #: repository (the normal install): adapters/hermes/eventmem-graph/dashboard/ → repo.
@@ -443,6 +445,165 @@ async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
         state, dim, note = _reembed(conn, int(eid))
         conn.commit()
         return {"ok": True, "id": int(eid), "vector": state, "dim": int(dim), "note": note}
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise HTTPException(status_code=503, detail=f"写入失败：{exc}") from exc
+    finally:
+        conn.close()
+
+
+def _project_id(conn: sqlite3.Connection, name: Any) -> Optional[int]:
+    """``None``/``""``/``unfiled``/``未归类`` → NULL (未归类); any other name must exist."""
+    if name is None:
+        return None
+    name = str(name).strip()
+    if not name or name.lower() == "unfiled" or name == "未归类":
+        return None
+    row = conn.execute("SELECT id FROM projects WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail=f"没有项目 {name!r}；先在图谱里建（proj_add）")
+    return int(row["id"])
+
+
+def _refresh_cross(conn: sqlite3.Connection, ids: list[int]) -> int:
+    """Re-mark ``edges.cross`` for the edges touching ``ids`` — the flag follows the projects.
+
+    Moving an atom into its partner's project has to clear the cross mark, and moving it out has
+    to set it.  The relation itself is untouched: a human edit is never destroyed by a re-mark.
+    """
+    ph = ",".join("?" * len(ids))
+    rows = conn.execute(
+        "SELECT e.src AS src, e.dst AS dst, e.cross AS cross, "
+        "       a.project_id AS pa, b.project_id AS pb "
+        "FROM edges e JOIN events a ON a.id = e.src JOIN events b ON b.id = e.dst "
+        f"WHERE e.src IN ({ph}) OR e.dst IN ({ph})",
+        (*ids, *ids),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        pa, pb = row["pa"], row["pb"]
+        want = 1 if (pa is not None and pb is not None and pa != pb) else 0
+        if int(row["cross"] or 0) != want:
+            conn.execute("UPDATE edges SET cross = ? WHERE src = ? AND dst = ?",
+                         (want, int(row["src"]), int(row["dst"])))
+            changed += 1
+    return changed
+
+
+def _mark_reseat(conn: sqlite3.Connection, ids: list[int]) -> float:
+    """Ask the next link pass to start before the oldest touched event (0 = already covered).
+
+    Candidate selection depends on the projects, so a project edit invalidates the *candidates*
+    of every event from here on — but not the judgments already in ``pair_evals``.  The pass
+    therefore re-selects (cheap) and asks the model only about pairs it has never seen.  Never
+    moves forward: an earlier pending marker wins.
+    """
+    from eventmem_core.nightly import RESEAT_KEY
+
+    ph = ",".join("?" * len(ids))
+    row = conn.execute(f"SELECT min(ts) AS ts FROM events WHERE id IN ({ph})", ids).fetchone()
+    stamp = row["ts"] if row is not None else None
+    if stamp is None:
+        return 0.0
+    want = float(stamp) - 1.0
+    current = conn.execute("SELECT value FROM meta WHERE key = ?", (RESEAT_KEY,)).fetchone()
+    try:
+        have = float(current["value"]) if current is not None else 0.0
+    except (TypeError, ValueError):
+        have = 0.0
+    if 0 < have <= want:
+        return have
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (RESEAT_KEY, "%.3f" % want),
+    )
+    return want
+
+
+@router.post("/events/batch")
+async def batch_events(body: dict[str, Any]) -> dict[str, Any]:
+    """Batch-edit ``project`` / ``kind`` on a lasso selection.
+
+    A project is not a cosmetic label: it is part of the re-encoded vector payload
+    (``[项目] 类型 正文``), it is a membership row in ``event_projects`` (that is what candidate
+    selection reads) and it decides ``edges.cross``.  So one call does all four things — the
+    columns, the membership row, the vector, the cross flags — and then marks the candidate
+    reseat.  No edge is deleted: existing relations stay, only never-asked pairs can appear.
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="要一个 JSON 对象")
+    raw = body.get("ids")
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400, detail="ids 必须是非空数组")
+    ids: list[int] = []
+    for value in raw:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise HTTPException(status_code=400, detail="ids 只能是事件编号")
+        if value not in ids:
+            ids.append(value)
+        if len(ids) > MAX_BATCH:
+            raise HTTPException(status_code=400, detail=f"一次最多改 {MAX_BATCH} 条")
+    has_project = "project" in body
+    kind = body.get("kind")
+    if kind is not None and kind not in KINDS:
+        raise HTTPException(status_code=400, detail=f"类型必须是 {'/'.join(KINDS)}")
+    if not has_project and kind is None:
+        raise HTTPException(status_code=400, detail="project 或 kind 至少要改一个")
+
+    conn = _connect()
+    try:
+        _ensure(conn)
+        pid = _project_id(conn, body.get("project")) if has_project else None
+        ph = ",".join("?" * len(ids))
+        found = [int(r["id"]) for r in conn.execute(f"SELECT id FROM events WHERE id IN ({ph})", ids)]
+        found.sort()
+        if not found:
+            raise HTTPException(status_code=404, detail="这些事件都不存在")
+        missing = sorted(set(ids) - set(found))
+
+        assigns: list[str] = []
+        values: list[Any] = []
+        if has_project:
+            assigns.append("project_id = ?")
+            values.append(pid)
+        if kind is not None:
+            assigns.append("kind = ?")
+            values.append(kind)
+        assigns.append("edited_ts = ?")
+        stamp = time.time()
+        for eid in found:
+            conn.execute(f"UPDATE events SET {', '.join(assigns)} WHERE id = ?", (*values, stamp, eid))
+
+        if has_project:
+            # 主项目是 event_projects 里唯一一行 is_primary=1（有 partial unique index 盯着）。
+            conn.execute(f"DELETE FROM event_projects WHERE is_primary = 1 AND event_id IN ({ph})", found)
+            if pid is not None:
+                for eid in found:
+                    conn.execute(
+                        "INSERT INTO event_projects(event_id, project_id, is_primary) VALUES(?,?,1) "
+                        "ON CONFLICT(event_id, project_id) DO UPDATE SET is_primary = 1",
+                        (eid, pid),
+                    )
+
+        # 项目进了向量 payload，不重算等于检索还按旧项目走。
+        vector = {"updated": 0, "skipped": 0, "note": ""}
+        for eid in found:
+            state, _dim, note = _reembed(conn, eid)
+            vector[state] = vector.get(state, 0) + 1
+            if state == "skipped" and not vector["note"]:
+                vector["note"] = note
+
+        cross = _refresh_cross(conn, found)
+        reseat = _mark_reseat(conn, found)
+        conn.commit()
+        return {
+            "ok": True,
+            "updated": len(found),
+            "missing": missing,
+            "vector": vector,
+            "cross": cross,
+            "reseat": reseat or None,
+        }
     except sqlite3.Error as exc:
         conn.rollback()
         raise HTTPException(status_code=503, detail=f"写入失败：{exc}") from exc

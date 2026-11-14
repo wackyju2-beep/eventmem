@@ -74,6 +74,7 @@ __all__ = [
     "CROSS_TOP_K",
     "MARGIN",
     "CURSOR_KEY",
+    "RESEAT_KEY",
 ]
 
 #: Question 1 — the conflict axis.  One of these, or the server's implicit
@@ -150,6 +151,11 @@ MAX_FAIL_STREAK = _POLICY.max_fail_streak
 
 #: Meta key holding the timestamp the next run starts from.
 CURSOR_KEY = "nightly_since_ts"
+#: Meta key asking the next run to start *earlier* than the cursor — set by the graph after a
+#: batch project/kind edit, whose candidate set depends on the projects that were just changed.
+#: It never moves a pass forward and never re-asks a judged pair (``pair_evals`` is checked
+#: first), so honouring it costs candidate selection only.
+RESEAT_KEY = "reseat_since_ts"
 
 _AXIS_RELS = tuple(rel for rel, *_rest in AXIS_OPTIONS if rel != NONE_LABEL)
 #: What one axis answer actually carries on the wire: the three relations **and** the

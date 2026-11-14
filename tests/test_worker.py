@@ -94,6 +94,35 @@ def test_unhealthy_probe_is_false_not_an_exception() -> None:
     assert worker.healthy("http://127.0.0.1:9") is False
 
 
+@case
+def test_reseat_marker_reopens_the_window() -> None:
+    """图谱批量改项目后写 reseat：游标已经很新，这一轮仍要从更早处重选（不调模型）。"""
+    db = fresh_db()
+    try:
+        store = Store(db)
+        store.add_event('结果', '一条真实事件', ts=1000.0)
+        future = '%.3f' % (time.time() + 3600)
+        store.set_meta('nightly_since_ts', future)
+        assert worker.run_once(cfg(db)) == {"skipped": "idle", "events": 0}
+
+        store.set_meta('reseat_since_ts', '%.3f' % 999.0)
+        got = worker.run_once(cfg(db))
+        assert got.get("skipped") != "idle", got       # 死端口 → jev-unavailable：窗口真的开了
+        assert store.get_meta('nightly_since_ts') == future, 'a failed pass must not move the cursor'
+
+        assert store.clear_meta_if('reseat_since_ts', '999.000') is True
+        assert store.clear_meta_if('reseat_since_ts', '999.000') is False, 'compare-and-set, second time is a no-op'
+        assert store.get_meta('reseat_since_ts') is None
+        assert worker.run_once(cfg(db)) == {"skipped": "idle", "events": 0}, 'marker gone → back to idle'
+        store.close()
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(db + suffix)
+            except FileNotFoundError:
+                pass
+
+
 def main() -> int:
     passed = failed = 0
     for fn in CASES:

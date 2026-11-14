@@ -537,6 +537,20 @@ class Store:
             self._db.commit()
         return True
 
+    def clear_meta_if(self, key: str, expect: str) -> bool:
+        """Compare-and-set delete: drop the row only while it still holds ``expect``.
+
+        The graph leaves a "reseat" marker (``nightly.RESEAT_KEY``) when a batch edit changes a
+        project; the worker consumes it and clears it here.  Clearing unconditionally would
+        throw away a marker written *during* the pass it just ran.
+        """
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM meta WHERE key = ? AND value = ?", (str(key), str(expect))
+            )
+            self._db.commit()
+        return bool(cur.rowcount)
+
     # --------------------------------------------------------------------- edges
 
     def add_edge(
