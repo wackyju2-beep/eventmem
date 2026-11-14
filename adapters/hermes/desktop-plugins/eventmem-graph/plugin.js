@@ -372,6 +372,39 @@ function atomPasses(ev, filters, idSet, semIds, semActive) {
 
 const edgeRelKey = e => (e.kind === 'none' ? 'none' : e.rel)
 
+// 下拉选项的取值：项目的「未归类」是空 project，会话没有 id 时不可选。
+const FACET_VALUE = {
+  project: ev => ev.project || '未归类',
+  session: ev => ev.session || '',
+  date: ev => dayKey(ev.ts)
+}
+
+/**
+ * 分面计数：每个下拉只列「其它条件都满足的事件里真的存在」的值。
+ * 选了项目之后再打开会话下拉，里面剩的就只有这个项目里出现过的会话——
+ * 否则列表是全库的（几十个会话），而命中集里往往只有其中几个，等于找不到。
+ * 算某个维度时把它自己排除，否则选完会话，别的会话就全从列表里消失了。
+ */
+function facetCounts(events, filters, idSet, semIds, semActive, pool) {
+  const out = { project: new Map(), session: new Map(), date: new Map() }
+  for (const facet of ['project', 'session', 'date']) {
+    const scoped = { ...filters, [facet]: '' }
+    const pick = FACET_VALUE[facet]
+    const counts = out[facet]
+    for (const ev of events) {
+      if (!atomPasses(ev, scoped, idSet, semIds, semActive)) continue
+      if (pool && !pool.has(ev.id)) continue   // 关系维度也要算进来：选了「否定」就只看这类边的端点
+      const value = pick(ev)
+      if (!value) continue
+      const row = counts.get(value) || { n: 0, last: 0 }
+      row.n += 1
+      if (ev.ts > row.last) row.last = ev.ts
+      counts.set(value, row)
+    }
+  }
+  return out
+}
+
 /**
  * 所有筛选条件同时生效（AND）：
  *   - 原子维度（项目/会话/日期/类型/序号/语义）决定哪些原子算「命中」；
@@ -1935,19 +1968,29 @@ function RelationPicker({ value, onChange, allowEmpty }) {
     options: [...(allowEmpty ? [{ value: '', label: '— 选一个关系 —' }] : []), ...RELS.map(rel => ({ value: rel, label: rel }))] })
 }
 
-function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
+function AtomInspector({ atom, scene, projects, ctx, onSaved, onSelectEdge, onClose }) {
   const [text, setText] = useState(atom.text)
   const [kind, setKind] = useState(atom.kind)
+  const [project, setProject] = useState(atom.project || '未归类')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [note, setNote] = useState(null)
   useEffect(() => {
     setText(atom.text)
     setKind(atom.kind)
+    setProject(atom.project || '未归类')
     setErr('')
-  }, [atom.id, atom.text, atom.kind])
+  }, [atom.id, atom.text, atom.kind, atom.project])
 
-  const dirty = text.trim() !== atom.text || kind !== atom.kind
+  const projectOptions = useMemo(
+    () => [
+      { value: '未归类', label: '未归类' },
+      ...(projects || []).filter(p => p.status !== 'archived').map(p => ({ value: p.name, label: p.name }))
+    ],
+    [projects]
+  )
+
+  const dirty = text.trim() !== atom.text || kind !== atom.kind || project !== (atom.project || '未归类')
   const mine = scene.edges.filter(e => e.src === atom.id || e.dst === atom.id)
   const says = note && note.id === atom.id ? note.text : ''
 
@@ -1956,13 +1999,21 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
     setErr('')
     setNote(null)
     try {
-      const res = await ctx.rest(`/events/${atom.id}`, { method: 'PATCH', body: { text, kind } })
+      // 只发真的改了的字段：后端按「出现即改」处理，发全量会让一次改正文也触发候选重选。
+      const body = {}
+      if (text.trim() !== atom.text) body.text = text
+      if (kind !== atom.kind) body.kind = kind
+      if (project !== (atom.project || '未归类')) body.project = project === '未归类' ? null : project
+      const res = await ctx.rest(`/events/${atom.id}`, { method: 'PATCH', body })
       // 后端会连同 Embedding 向量一起重算；编码器不可用时只有正文落下，必须说出来。
+      const saved = res && res.vector === 'updated'
+        ? `已保存，Embedding 向量已重算（${res.dim} 维）`
+        : `已保存；向量没有更新：${(res && res.note) || '未知原因'}`
       setNote({
         id: atom.id,
-        text: res && res.vector === 'updated'
-          ? `已保存，Embedding 向量已重算（${res.dim} 维）`
-          : `已保存正文；向量没有更新：${(res && res.note) || '未知原因'}`
+        text: saved + (res && res.reseat
+          ? '。项目/类型变了：下一轮连边会从这条之前重选候选，判过的对不再问，已有的边一条不删'
+          : '')
       })
       await onSaved()
     } catch (e) {
@@ -1987,7 +2038,6 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
         className: 'em-meta',
         children: [
           jsx('div', { children: fmtFull(atom.ts) }),
-          jsx('div', { children: `项目：${atom.project || '未归类'}` }),
           jsx('div', { children: `会话：${shortSession(atom.session)}` }),
           atom.edited_ts
             ? jsx('div', {
@@ -2006,6 +2056,13 @@ function AtomInspector({ atom, scene, ctx, onSaved, onSelectEdge, onClose }) {
             onChange: setKind,
             options: KINDS.map(k => ({ value: k, label: k }))
           })
+        ]
+      }),
+      jsxs('label', {
+        className: 'em-field',
+        children: [
+          jsx('span', { className: 'em-label', children: '所属项目' }),
+          jsx(GraphSelect, { value: project, onChange: setProject, options: projectOptions })
         ]
       }),
       jsxs('label', {
@@ -2379,42 +2436,6 @@ function GraphPage({ ctx }) {
     return { atoms: rawScene.atoms.length, rel, none }
   }, [rawScene])
 
-  const projectOptions = useMemo(() => {
-    const counts = new Map()
-    for (const ev of data?.events || []) {
-      const name = ev.project || '未归类'
-      counts.set(name, (counts.get(name) || 0) + 1)
-    }
-    return [{ value: '', label: '项目：不限' }, ...[...counts.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0], 'zh'))
-      .map(([name, n]) => ({ value: name, label: `${name} · ${n} 条` }))]
-  }, [data])
-
-  const sessionOptions = useMemo(() => {
-    const byId = new Map()
-    for (const ev of data?.events || []) {
-      if (!ev.session) continue
-      const row = byId.get(ev.session) || { id: ev.session, count: 0, last: 0 }
-      row.count += 1
-      row.last = Math.max(row.last, ev.ts)
-      byId.set(ev.session, row)
-    }
-    return [{ value: '', label: '会话：不限' }, ...[...byId.values()]
-      .sort((a, b) => b.last - a.last)
-      .map(s => ({ value: s.id, label: `${shortSession(s.id)} · ${s.count} 条` }))]
-  }, [data])
-
-  const dateOptions = useMemo(() => {
-    const counts = new Map()
-    for (const ev of data?.events || []) {
-      const k = dayKey(ev.ts)
-      counts.set(k, (counts.get(k) || 0) + 1)
-    }
-    return [{ value: '', label: '日期：不限' }, ...[...counts.entries()]
-      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-      .map(([k, n]) => ({ value: k, label: `${k} · ${n} 条` }))]
-  }, [data])
-
   const idSpec = useMemo(() => parseIdSpec(filters.ids), [filters.ids])
 
   const idUnknown = useMemo(() => {
@@ -2426,6 +2447,54 @@ function GraphPage({ ctx }) {
   }, [data, idSpec])
 
   const semActive = Boolean(sem && sem.q && !sem.error)
+  // 分面：每个下拉的选项只来自「其它条件都满足的事件」，选了项目之后会话列表就只剩这个项目里的。
+  const semIds = useMemo(
+    () => (semActive ? new Set(sem.hits.map(h => h.id)) : null),
+    [semActive, sem]
+  )
+  // 关系筛选也算一条约束：选了某类关系，下拉里只剩下落在这类边端点上的值。
+  const relPool = useMemo(() => {
+    if (!filters.rels.length) return null
+    const ids = new Set()
+    for (const e of scene?.edges || []) {
+      ids.add(e.src)
+      ids.add(e.dst)
+    }
+    return ids
+  }, [filters.rels, scene])
+  const facets = useMemo(
+    () => facetCounts(data?.events || [], filters, idSpec.ids, semIds, semActive, relPool),
+    [data, filters, idSpec, semIds, semActive, relPool]
+  )
+  const projectOptions = useMemo(() => {
+    const list = [...facets.project.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], 'zh'))
+      .map(([v, r]) => ({ value: v, label: `${v} · ${r.n} 条` }))
+    // 选中的值即使被别的条件筛成 0 条也要留在列表里，否则下拉会显示成空、看不出在筛什么。
+    if (filters.project && !facets.project.has(filters.project)) {
+      list.unshift({ value: filters.project, label: `${filters.project} · 0 条` })
+    }
+    return [{ value: '', label: '项目：不限' }, ...list]
+  }, [facets, filters.project])
+  const sessionOptions = useMemo(() => {
+    const list = [...facets.session.entries()]
+      .sort((a, b) => b[1].last - a[1].last)
+      .map(([v, r]) => ({ value: v, label: `${shortSession(v)} · ${r.n} 条` }))
+    if (filters.session && !facets.session.has(filters.session)) {
+      list.unshift({ value: filters.session, label: `${shortSession(filters.session)} · 0 条` })
+    }
+    return [{ value: '', label: '会话：不限' }, ...list]
+  }, [facets, filters.session])
+  const dateOptions = useMemo(() => {
+    const list = [...facets.date.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([v, r]) => ({ value: v, label: `${v} · ${r.n} 条` }))
+    if (filters.date && !facets.date.has(filters.date)) {
+      list.unshift({ value: filters.date, label: `${filters.date} · 0 条` })
+    }
+    return [{ value: '', label: '日期：不限' }, ...list]
+  }, [facets, filters.date])
+
   const activeCount = [
     filters.project,
     filters.session,
@@ -2895,6 +2964,7 @@ function GraphPage({ ctx }) {
         ? jsx(AtomInspector, {
             atom: selectedAtom,
             scene,
+            projects: data.projects || [],
             ctx,
             onSaved,
             onSelectEdge: e => selectEdge(e, true),

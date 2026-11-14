@@ -413,10 +413,18 @@ def _reembed(conn: sqlite3.Connection, eid: int) -> tuple[str, int, str]:
 
 @router.patch("/events/{eid}")
 async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
+    """Edit one event's text / kind / project.
+
+    A project is not a label: the membership row, the vector payload and the ``cross`` flags
+    all follow it, and candidate selection has to be re-run — same contract as the batch
+    endpoint, so both paths go through the same helpers.  Whatever the body leaves out is
+    left alone (the inspector sends only what changed).
+    """
     text = body.get("text")
     kind = body.get("kind")
-    if text is None and kind is None:
-        raise HTTPException(status_code=400, detail="text 或 kind 至少要改一个")
+    has_project = "project" in body
+    if text is None and kind is None and not has_project:
+        raise HTTPException(status_code=400, detail="text、kind、project 至少要改一个")
     if text is not None:
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(status_code=400, detail="正文不能为空")
@@ -428,6 +436,7 @@ async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
     conn = _connect()
     try:
         _ensure(conn)
+        pid = _project_id(conn, body.get("project")) if has_project else None
         sets, params = [], []
         if text is not None:
             sets.append("text = ?")
@@ -435,16 +444,25 @@ async def patch_event(eid: int, body: dict[str, Any]) -> dict[str, Any]:
         if kind is not None:
             sets.append("kind = ?")
             params.append(kind)
+        if has_project:
+            sets.append("project_id = ?")
+            params.append(pid)
         sets.append("edited_ts = ?")
         params.append(time.time())
         params.append(int(eid))
         cur = conn.execute(f"UPDATE events SET {', '.join(sets)} WHERE id = ?", params)
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail=f"事件 #{eid} 不存在")
-        # 改完正文就重算向量：否则检索（向量臂）还在用旧文本，改了半天召回不到。
+        if has_project:
+            _set_primary_project(conn, [int(eid)], pid)
+        # 改完正文/项目就重算向量：否则检索（向量臂）还在用旧文本、旧项目，召回不到。
         state, dim, note = _reembed(conn, int(eid))
+        # 项目和类型都进候选口径（项目进 tier3/Q2，类型进 cross_kinds），变了才需要重选。
+        cross = _refresh_cross(conn, [int(eid)]) if has_project else 0
+        reseat = _mark_reseat(conn, [int(eid)]) if (has_project or kind is not None) else 0.0
         conn.commit()
-        return {"ok": True, "id": int(eid), "vector": state, "dim": int(dim), "note": note}
+        return {"ok": True, "id": int(eid), "vector": state, "dim": int(dim), "note": note,
+                "cross": cross, "reseat": reseat or None}
     except sqlite3.Error as exc:
         conn.rollback()
         raise HTTPException(status_code=503, detail=f"写入失败：{exc}") from exc
@@ -463,6 +481,24 @@ def _project_id(conn: sqlite3.Connection, name: Any) -> Optional[int]:
     if row is None:
         raise HTTPException(status_code=400, detail=f"没有项目 {name!r}；先在图谱里建（proj_add）")
     return int(row["id"])
+
+
+def _set_primary_project(conn: sqlite3.Connection, ids: list[int], pid: Optional[int]) -> None:
+    """Move the ``is_primary = 1`` membership row of ``ids`` to ``pid`` (None = 未归类).
+
+    ``events.project_id`` alone is not enough: candidate selection reads ``event_projects``,
+    and the partial unique index there allows exactly one primary row per event.
+    """
+    ph = ",".join("?" * len(ids))
+    conn.execute(f"DELETE FROM event_projects WHERE is_primary = 1 AND event_id IN ({ph})", ids)
+    if pid is None:
+        return
+    for eid in ids:
+        conn.execute(
+            "INSERT INTO event_projects(event_id, project_id, is_primary) VALUES(?,?,1) "
+            "ON CONFLICT(event_id, project_id) DO UPDATE SET is_primary = 1",
+            (eid, pid),
+        )
 
 
 def _refresh_cross(conn: sqlite3.Connection, ids: list[int]) -> int:
@@ -575,15 +611,7 @@ async def batch_events(body: dict[str, Any]) -> dict[str, Any]:
             conn.execute(f"UPDATE events SET {', '.join(assigns)} WHERE id = ?", (*values, stamp, eid))
 
         if has_project:
-            # 主项目是 event_projects 里唯一一行 is_primary=1（有 partial unique index 盯着）。
-            conn.execute(f"DELETE FROM event_projects WHERE is_primary = 1 AND event_id IN ({ph})", found)
-            if pid is not None:
-                for eid in found:
-                    conn.execute(
-                        "INSERT INTO event_projects(event_id, project_id, is_primary) VALUES(?,?,1) "
-                        "ON CONFLICT(event_id, project_id) DO UPDATE SET is_primary = 1",
-                        (eid, pid),
-                    )
+            _set_primary_project(conn, found, pid)
 
         # 项目进了向量 payload，不重算等于检索还按旧项目走。
         vector = {"updated": 0, "skipped": 0, "note": ""}

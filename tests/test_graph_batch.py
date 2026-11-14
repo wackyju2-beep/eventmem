@@ -168,6 +168,39 @@ class BatchEditTests(unittest.TestCase):
         self.assertEqual(res['updated'], 1)
         self.assertEqual(res['missing'], [999999])
 
+    # -- 单条编辑（检查器）走的是同一套项目语义 ------------------------------
+    def test_single_edit_moves_the_project_like_the_batch(self):
+        before_edges = self.edge_count()
+        res = asyncio.run(graph.patch_event(self.c, {'project': 'eventmem'}))
+        self.assertTrue(res['ok'])
+        self.assertEqual(res['vector'], 'updated')
+        self.assertEqual(res['reseat'], 3000.0 - 1.0)
+        self.assertEqual(self.project_of(self.c), 'eventmem')
+        pid = self.store._db.execute("SELECT id FROM projects WHERE name = 'eventmem'").fetchone()['id']
+        self.assertEqual(self.primaries(self.c), [pid])
+        self.assertEqual(self.cross_of(self.c, self.b), 0, 'both ends are eventmem now')
+        self.assertEqual(self.edge_count(), before_edges)
+        stamp = self.store._db.execute('SELECT edited_ts FROM events WHERE id = ?', (self.c,)).fetchone()[0]
+        self.assertTrue(stamp)
+
+    def test_single_edit_can_unfile(self):
+        res = asyncio.run(graph.patch_event(self.b, {'project': None}))
+        self.assertIsNone(self.project_of(self.b))
+        self.assertEqual(self.primaries(self.b), [])
+        self.assertIsNotNone(res['reseat'])
+
+    def test_text_only_edit_does_not_reseat(self):
+        res = asyncio.run(graph.patch_event(self.b, {'text': '克隆后启动正常（改过）'}))
+        self.assertEqual(res['vector'], 'updated')
+        self.assertIsNone(res['reseat'], 'a typo fix must not re-run candidate selection')
+        self.assertEqual(res['cross'], 0)
+        self.assertIsNone(self.store.get_meta('reseat_since_ts'))
+
+    def test_single_edit_needs_at_least_one_field(self):
+        with self.assertRaises(fastapi.HTTPException) as caught:
+            asyncio.run(graph.patch_event(self.a, {}))
+        self.assertEqual(caught.exception.status_code, 400)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
