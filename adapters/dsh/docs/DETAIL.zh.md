@@ -42,7 +42,7 @@ Linux/Hermes 的安装和 daemon 启动方法见[仓库快速开始](https://git
 
 **注意错连数据库：**探测会校验服务标识、API 版本和（配置了的话）`db_id`，占用端口的其他服务会被拒绝；但同一端点上另一个 *eventmem 数据库* 需要 `expectDbId` 才能识别。「连接」页会显示当前 `db_id`，把它填进 **预期数据库 ID** 即可钉住。仍可检查并确认上文所述卸载风险后，在仓库目录的 PowerShell 中运行 `.\install.cmd -Uninstall`；或者使用空闲本地端口，例如 `baseUrl: http://127.0.0.1:9124`、`tunnelLocalPort: 9124`，远端仍用 9123 时保留 `tunnelRemotePort: 9123`。不要将 SQLite/WAL 放在网络共享上。Windows 缺少 daemon 的 `flock` 单实例保护，不能依赖它阻止第二个 daemon 打开同一数据库。
 
-**安全边界：**daemon 默认只监听回环地址，并可要求 bearer token（`--token` 或 `--token-file`）。设置 token 后，除最小化的 health 探测外所有路由都需要它；非回环绑定且没有 token 时 daemon 会拒绝启动。没有 token 的回环地址仍是本地信任边界：任何能访问该端口的本地用户或进程都可读写数据库。共享机器上应启用 token，保持仅回环监听，远程访问走 SSH，不要暴露到不可信网络。未显式指定 `--host` 时，`EVENTMEM_DAEMON_HOST` 可改变默认绑定地址，但 token 约束仍然生效。SSH `-L` 的监听也受客户端 `GatewayPorts` 设置影响，应确认实际转发监听仅限回环。详见[数据面 API](https://github.com/wackyju2-beep/eventmem/blob/main/docs/api.md)。
+**安全边界：**daemon 默认只监听回环地址，并可要求 bearer token（`--token` 或 `--token-file`）。设置 token 后，除最小化的 health 探测外所有路由都需要它；非回环绑定且没有 token 时 daemon 会拒绝启动。带有外站 `Origin` 的 POST 会被拒绝（CSRF 防护）；管理台代理这类服务端调用不带 Origin，不受影响。没有 token 的回环地址仍是本地信任边界：任何能访问该端口的本地用户或进程都可读写数据库。共享机器上应启用 token，保持仅回环监听，远程访问走 SSH，不要暴露到不可信网络。未显式指定 `--host` 时，`EVENTMEM_DAEMON_HOST` 可改变默认绑定地址，但 token 约束仍然生效。SSH `-L` 的监听也受客户端 `GatewayPorts` 设置影响，应确认实际转发监听仅限回环。详见[数据面 API](https://github.com/wackyju2-beep/eventmem/blob/main/docs/api.md)。
 
 ## 模型前置条件
 

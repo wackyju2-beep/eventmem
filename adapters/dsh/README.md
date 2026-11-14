@@ -162,6 +162,8 @@ do not rely on it to prevent another daemon from opening the same database.
 **Security:** the daemon binds loopback by default. Its management API can require a bearer
 token (`--token` or `--token-file`); when a token is set, every route except the minimal
 health probe requires it, and a non-loopback bind without a token is refused at startup.
+A POST that carries a foreign `Origin` is rejected (CSRF guard); server-to-server callers
+such as the console proxy send no origin and are unaffected.
 Loopback without a token is still a trust boundary: any local process or user that can reach
 the port can read and edit the database. Enable a token on shared machines, keep the daemon
 on loopback, and use SSH for remote access; do not expose it to an untrusted network.

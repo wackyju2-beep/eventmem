@@ -92,7 +92,7 @@ plugins:
 
 ```
 Hermes 适配器在本机调用 core；DSH 适配器通过 HTTP 数据面连接 daemon。适配器负责对接宿主和调用宿主模型进行抽取，core 本身不是通用的事件抽取模型。新写入的数据带有 Agent/会话标记。其他宿主需要单独开发适配器或 API 集成，并非自动支持。  
-**每个数据库只运行一个 daemon。** API 和管理台默认只监听本机回环地址，并可要求 bearer token（`--token` 或 `--token-file`）；设置 token 后，除最小化的 health 探测外所有路由都需要它，非回环绑定且没有 token 时 daemon 拒绝启动。没有 token 时，任何能访问该端口的本地进程都被信任；共享机器上应启用 token，不要暴露到不可信网络。详见[架构与](docs/architecture.md "docs/architecture.md")[数据面 API。](docs/api.md "docs/api.md")  
+**每个数据库只运行一个 daemon。** API 和管理台默认只监听本机回环地址，并可要求 bearer token（`--token` 或 `--token-file`）；设置 token 后，除最小化的 health 探测外所有路由都需要它，非回环绑定且没有 token 时 daemon 拒绝启动。带有外站 `Origin` 的 POST 会被拒绝，浏览器里其他站点的页面无法写入；管理台和宿主代理是服务端到服务端调用、不带 Origin，不受影响。没有 token 时，任何能访问该端口的本地进程都被信任；共享机器上应启用 token，不要暴露到不可信网络。详见[架构与](docs/architecture.md "docs/architecture.md")[数据面 API。](docs/api.md "docs/api.md")  
 **文档**  
 - [架构与数据流 ·](docs/architecture.md "docs/architecture.md") [关系与连边](docs/relations.md "docs/relations.md")  
 - [决策后端与模型安装 ·](docs/backends.md "docs/backends.md") [设置 ·](docs/settings.md "docs/settings.md") [API](docs/api.md "docs/api.md")  

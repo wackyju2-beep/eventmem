@@ -64,10 +64,12 @@ literal search. See the [model configuration guide](https://github.com/wackyju2-
 - The separately installed daemon and console bind loopback by default and can
   require a bearer token (`--token` or `--token-file`); with a token set, every
   route except the minimal health probe needs it, and a non-loopback bind without
-  a token is refused at startup. There is no TLS and no per-user authorization:
-  without a token any local process or user that can reach the port is trusted.
-  Keep them on trusted loopback or behind a properly secured tunnel; do not expose
-  them directly to an untrusted network. Use one daemon per database.
+  a token is refused at startup. A POST that carries a foreign `Origin` is
+  rejected, so a page on another site cannot write to it. There is no TLS and no
+  per-user authorization: without a token any local process or user that can
+  reach the port is trusted. Keep them on trusted loopback or behind a properly
+  secured tunnel; do not expose them directly to an untrusted network. Use one
+  daemon per database.
 - Display language is read from the active profile at render time. In one process
   serving several profiles, without an ambient profile home, Hermes' own home
   getter falls back to the process home; only display strings are affected.

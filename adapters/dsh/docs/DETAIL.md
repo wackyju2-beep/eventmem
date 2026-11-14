@@ -108,7 +108,8 @@ has the configuration fields.
 
 **Security:** the daemon binds loopback by default. It can require a bearer token
 (`--token` or `--token-file`); when set, every route except the minimal health probe needs
-it, and a non-loopback bind without a token is refused at startup. Loopback without a token
+it, and a non-loopback bind without a token is refused at startup. A POST that carries a
+foreign `Origin` is rejected (CSRF guard); server-to-server callers send no origin. Loopback without a token
 is still a local trust boundary: any local process that can reach the port can read and edit
 the database. Enable a token on shared machines, keep the daemon on loopback, and use SSH
 for remote access; do not expose it to an untrusted network. `EVENTMEM_DAEMON_HOST` changes

@@ -32,7 +32,7 @@ Core 不负责调用通用模型从对话里抽事件；由各 adapter 接入各
 
 - 一个数据库只运行一个 daemon。不要依赖自动锁来避免重复实例：Windows 上缺少 `fcntl` 时 daemon 的单实例锁会禁用。
 - SQLite/WAL 留在本机磁盘，不放网络共享目录。跨机器通过 daemon 的 HTTP API 和 SSH 隧道共享数据，不直接共享数据库文件。
-- daemon 的 API 与管理台默认只监听 `127.0.0.1`，并可要求 bearer token（`--token` / `--token-file`）；非回环绑定且没有 token 时拒绝启动。没有 token 时，能访问该端口的本地进程仍是信任边界。不要暴露到不可信网络；跨机访问使用 SSH。更多安全注意事项见 [API](api.md)。
+- daemon 的 API 与管理台默认只监听 `127.0.0.1`，并可要求 bearer token（`--token` / `--token-file`）；非回环绑定且没有 token 时拒绝启动。带外站 `Origin` 的 POST 会被拒绝（CSRF 防护；服务端到服务端的代理不带 Origin，不受影响）。没有 token 时，能访问该端口的本地进程仍是信任边界。不要暴露到不可信网络；跨机访问使用 SSH。更多安全注意事项见 [API](api.md)。
 - 向量模型和关系判定后端都是可选项：缺少 encoder 时只使用 FTS5；没有可用的判定后端时事件存储和召回仍可使用，但不会自动产生关系。
 
 ## Core API 示例
