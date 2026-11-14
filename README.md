@@ -1,9 +1,8 @@
 **eventmem**  
-[![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml "https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml")  
-   
- [![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)](LICENSE "LICENSE")  
+
 **English** · [中文](README.zh-CN.md "README.zh-CN.md")  
-**Memory that remembers what changed.**  
+
+***Memory that remembers what changed.***  
 A persistent, change-aware memory layer shared across AI agents. With the included [DeepSeek Harness (DSH) and Hermes adapters, one agent can record a project's decisions and results for another to recall—without sharing their conversation histories. Both must be configured to use the same eventmem database.](adapters/dsh/README.md "adapters/dsh/README.md")  
 - **Share work across agents:** record a result in DSH and retrieve it in Hermes, or the other way around.  
 - **Track changing facts:** keep earlier events and record when a newer event changes or negates them.  

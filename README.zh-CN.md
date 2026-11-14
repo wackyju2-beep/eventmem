@@ -1,9 +1,8 @@
 **eventmem**  
-[![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml "https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml")  
-   
- [![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAxElEQVR4nO1W0Q6AIAiE/v+bpaeaYyYc6NLVvbRm484DL1lEKAIRIWaG1zQ4IgAhsHCMJkc31BXQKmbtvF73iOkKQIvV8LbpFqAJ9Dvac2Z2iQ4N4UiYQ2gJ9G7g6TsupQw7UpHjefTCBCEmwueEaPAMhBzQBVDC+tkit2pOOQWXEx5H0gIy/ScK/Atq0os4k5ihHOilHJyYyyfhTIjIJg48idQ5EME6DrwlZB0HthaQcRG+FbeQuaZ/ewb2ScJfQBSe9p77EZ7a26s/yQAAAABJRU5ErkJggg==)](LICENSE "LICENSE")  
-[English · **中文**](README.md "README.md")  
-**记住「变化」本身.**  
+
+English · [**中文**](README.md "README.md")  
+
+***记住「变化」本身.***  
 一套可由多个 AI Agent 共享的持久记忆，不仅记住项目历史，也记录事实如何变化。通过现有的 [DeepSeek Harness（DSH）和 Hermes 适配器，一个 Agent 可以记录决定和结果，另一个 Agent 可以在需要时召回，不必共享各自的会话上下文。前提是两个适配器都配置到同一份 eventmem 数据库。](adapters/dsh/README.md "adapters/dsh/README.md")  
 - **跨 Agent 交接**：DSH 记录的工作，Hermes 可以检索；反过来也一样。  
 - **追踪事实变化**：保留旧事件，并记录新事件对旧事实的改变或否定。  
