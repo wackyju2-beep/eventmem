@@ -97,7 +97,7 @@ def build_payload(
                     "type": "choice",
                     "instructions": text,
                     "criteria": criteria,
-                    "allow_none": True,
+                    "allow_none": not ({NONE_OF_ABOVE, NONE_LABEL} & criteria.keys()),
                 }
                 for key, text, criteria in items
             },
@@ -106,7 +106,7 @@ def build_payload(
     payload_questions = []
     for key, text, criteria in items:
         choices = [{"value": label, "description": desc} for label, desc in criteria.items()]
-        if NONE_OF_ABOVE not in criteria:
+        if NONE_OF_ABOVE not in criteria and NONE_LABEL not in criteria:
             # OpenAI Decisions always gets its own none option; a question that already
             # carries 「都不是」 as a real label would end up with two of them.
             choices.append({"value": NONE_LABEL, "description": _none_description()})
@@ -251,7 +251,7 @@ def _parse_decisions(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
     raw = answer.get("choice")
     if raw is not None and not isinstance(raw, str):
         return None  # bool/int values can never be one of our labels
-    if raw == NONE_LABEL:
+    if raw == NONE_LABEL and NONE_LABEL not in labels:
         choice: str | None = None
     else:
         choice = raw
@@ -273,10 +273,12 @@ def _parse_decisions(answer: Any, labels: tuple[str, ...]) -> dict[str, Any] | N
             prob = _clamp01(entry.get("probability"))
             if prob is None:
                 continue
-            if value == NONE_LABEL:
-                none = prob
-            elif value in labels:
+            if value in labels:
                 probabilities[value] = prob
+            elif value == NONE_LABEL:
+                none = prob
+    if none is None and (NONE_OF_ABOVE in labels or NONE_LABEL in labels):
+        none = 0.0
     if none is None or len(probabilities) != len(labels):
         return None
     if abs(math.fsum(probabilities.values()) + none - 1.0) > 1e-6:

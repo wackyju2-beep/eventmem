@@ -85,6 +85,30 @@ class lang_of:
         return False
 
 
+@case
+def test_explicit_detail_none_across_protocols():
+    from eventmem_core import nightly
+    from eventmem_core.jev import JevClient
+
+    for labels in (("因为", "细化", "都不是"), ("because", "refine", "none")):
+        question = ("detail", "question", dict.fromkeys(labels, "definition"))
+        payload = providers.build_payload("systemone", "model", "state", [question])
+        check_eq(payload["questions"]["detail"]["allow_none"], False, "explicit none disables implicit none")
+        check_eq(JevClient._allow_none(question[2]), False, "Jev disables implicit none")
+        payload = providers.build_payload("openai-decisions", "model", "state", [question])
+        check_eq([c["value"] for c in payload["questions"][0]["choices"]], list(labels), "no duplicate none")
+        probs = dict(zip(labels, (0.05, 0.05, 0.90)))
+        system = {"answers": {"detail": {"choice": labels[2], "probabilities": probs}}}
+        check(providers.parse_answers("systemone", system, [question])[0] is not None, "systemone accepts none")
+        decision = {"answers": [{"name": "detail", "type": "choice", "choice": labels[2],
+                                  "probabilities": [{"value": k, "probability": v} for k, v in probs.items()]}]}
+        result = providers.parse_answers("openai-decisions", decision, [question])[0]
+        check(result is not None, "decisions accepts none")
+        result = nightly._canonical_answer(result)
+        check_eq(nightly._dist(result, nightly._DETAIL_RELS)[nightly.NONE_LABEL], 0.9, "none probability preserved")
+        check_eq(nightly._accepted(result, nightly._DETAIL_RELS), None, "none never creates an edge")
+
+
 # --------------------------------------------------------------------------- System One
 
 @case

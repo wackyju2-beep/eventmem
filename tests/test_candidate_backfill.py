@@ -40,13 +40,12 @@ class BackfillTests(unittest.TestCase):
         self.store.add_event('尝试', 'a', ts=1, session='s')
         self.store.add_event('尝试', 'b', ts=2, session='s')
         client = JevClient('http://localhost:18090')
-        # axis 现在是 4 个真标签（都不是 在 probabilities 里，服务端 allow_none 关掉）；
-        # detail 仍然靠服务端的 none_probability，所以这里两种尺度各覆盖一次。
+        # 两道题均将「都不是」作为真标签，服务端隐式 none 已关闭。
         raw = {'answers': {
             'axis': {'choice': '改变', 'confidence': .8,
                      'probabilities': {'重复': .1, '改变': .8, '否定': .05, '都不是': .05}},
-            'detail': {'choice': None, 'confidence': .8,
-                       'probabilities': {'因为': .5, '细化': .5}, 'none_probability': .8}}}
+            'detail': {'choice': '都不是', 'confidence': .8,
+                       'probabilities': {'因为': .1, '细化': .1, '都不是': .8}}}}
         plan = preview(self.store)
         with patch.dict('os.environ', {'EVENTMEM_LANG': 'zh'}), \
              patch.object(client, 'available', return_value=True), \

@@ -77,48 +77,74 @@ __all__ = [
     "RESEAT_KEY",
 ]
 
-#: Question 1 — the conflict axis.  One of these, or the server's implicit
-#: "none of the above" (``none_probability``), which is not listed here.
+#: Question 1 — the conflict axis, including an explicit none label.
 #: The definitions are deliberately operational: 改变 vs 否定 is decided by
 #: "did it give a replacement of the same kind?", not by whether the wording
 #: sounds like a rejection.
 AXIS_KEY = "axis"
-AXIS_TEXT = "后一条相对前一条是什么关系？"
-AXIS_TEXT_EN = "What is the later event's relation to the earlier one?"
+AXIS_TEXT = "后一事件是否重复、替换或推翻了前一事件所描述的具体内容？若无法确认，选择「都不是」。"
+AXIS_TEXT_EN = "Does the later event repeat, replace, or overturn specific content described by the earlier event? If this cannot be confirmed, choose none."
 #: The "none of the above" option is sent as a **real label**.  It used to be left to the
 #: server (``allow_none``), which only works where the server implements it: LM Studio's
 #: systemone has no ``none_probability``, so 改变 was the only thing left to pick and the graph
 #: turned into one 356-node blob.  A real label makes every backend behave the same.
 NONE_LABEL = NONE_OF_ABOVE
 AXIS_OPTIONS = (
-    ("重复", "repeat", "语义等价，同一件事换种说法，未引入实质性新变化",
-     "Same meaning, reworded; nothing substantively new"),
+    ("重复", "repeat",
+     "后一事件与前一事件描述同一个具体事实、决定或操作，语义等价，没有提供实质性新信息。"
+     "仅仅主题相同、对象相同，或者描述同一任务的不同阶段，均不构成重复。",
+     "The later event describes the same specific fact, decision, or action as the earlier event, "
+     "is semantically equivalent, and adds no substantive information. Sharing a topic or object, "
+     "or describing different stages of the same task, is not enough."),
     ("改变", "change",
-     "同一个对象的同一条取值被替换：前一条点名的参数/开关/版本/数量/路径/配置项，后一条给出了它的新值"
-     "（「系统盘 256G」→「系统盘换成 1T」）。必须能指出被替换的是哪一条具体取值",
-     "Replaces one specific value of the same object: the parameter, flag, version, count, "
-     "path or config item named by the earlier event gets a new value (\"system disk 256G\" "
-     "→ \"system disk now 1T\"). You must be able to name which single value was replaced"),
-    ("否定", "negate", "方向性推翻或废止（明确表达不再执行、禁止或推翻前一条的做法，且没有给出同类平替参数）",
-     "Reverses or repeals the earlier behaviour (it is no longer done, or it is forbidden or "
-     "overturned) and offers no like-for-like replacement"),
+     "后一事件明确替换前一事件中同一对象、同一属性或配置项的原有取值，提供新的取值或状态。"
+     "必须能够指出具体被替换的内容及其新值。仅仅新增功能、补充信息、调整其他参数，"
+     "或者描述同一项目的不同工作，均不构成改变。",
+     "The later event explicitly replaces the earlier value of the same object's same property "
+     "or configuration item with a new value or state. Identify the specific replaced content and "
+     "its new value. Adding features or information, adjusting other parameters, or describing "
+     "different work in the same project is not enough."),
+    ("否定", "negate",
+     "后一事件明确推翻、取消或废止前一事件描述的决定、做法或状态，且没有提供同类替代值。"
+     "必须能够指出前一事件中具体被否定的内容。仅仅发现问题、执行失败、表达不同意见，"
+     "或者进行一般性调整，均不足以构成否定。",
+     "The later event explicitly overturns, cancels, or repeals a decision, practice, or state "
+     "described by the earlier event, without a like-for-like replacement value. Identify the "
+     "specific content negated. Finding a problem, failure, disagreement, or a general adjustment "
+     "is not enough."),
     (NONE_LABEL, "none",
-     "后一条没有替换前一条里的任何取值：两条讲的是不同的事/不同对象，或只是先后做的两件不相干的活",
-     "The later event does not replace any value named by the earlier one: they are about "
-     "different things or objects, or are two unrelated pieces of work"),
+     "两个事件之间缺少可直接确认的重复、改变或否定关系，包括同一项目内的不同任务、"
+     "相似但独立的事件，以及需要额外上下文才能判断的情况。",
+     "No directly confirmable repeat, change, or negate relation exists, including different tasks "
+     "in the same project, similar but independent events, and cases requiring additional context."),
 )
 
 #: Question 2 — the elaboration axis.  Independent of question 1, so a pair can
 #: carry one conflict edge *and* one elaboration edge.
 DETAIL_KEY = "detail"
-DETAIL_TEXT = "后一条和前一条是什么补充关系？"
-DETAIL_TEXT_EN = "What kind of elaboration does the later event add?"
+DETAIL_TEXT = "后一条是否直接解释了前一条的原因，或展开了前一条所描述的同一项具体工作？"
+DETAIL_TEXT_EN = "Does the later event directly explain the reason for the earlier event, or elaborate the same specific work described by it?"
 DETAIL_OPTIONS = (
-    ("因为", "because", "因果与动机解释（核心在于回答「为什么这样做」或背后的原因与目的）",
-     "Explains cause or motive — it answers why this was done"),
-    ("细化", "refine", "执行层细节展开（核心在于回答「具体怎么做」、包含哪些子步骤或局部参数，不涉及原因解释）",
-     "Adds implementation detail — it answers how, with sub-steps or local parameters, without "
-     "explaining why"),
+    ("因为", "because",
+     "后一事件明确解释前一事件发生、执行或被选择的原因、触发条件或决策依据。"
+     "必须能够根据事件内容直接指出：前一事件为什么发生，以及后一事件提供了什么具体的因果依据。"
+     "仅仅存在时间先后、主题关联、同一任务背景，或者能够推测出合理的因果关系，均不足以构成「因为」关系。",
+     "The later event explicitly explains the cause, trigger, or decision rationale for the earlier "
+     "event happening, being performed, or being chosen. Directly identify why the earlier event "
+     "occurred and the specific causal evidence supplied by the later one. Sequence, related topics, "
+     "shared task context, or a plausible inferred cause is not enough."),
+    ("细化", "refine",
+     "后一事件进一步展开前一事件所描述的同一个具体任务、操作或决定，提供其原本缺失的实施步骤、参数或内部细节。"
+     "必须能够明确指出：后一事件中的哪些信息是前一事件所描述工作的组成部分。"
+     "仅仅属于相同项目、涉及相同技术、时间接近，或者后一事件包含更多技术细节，均不足以构成细化关系。",
+     "The later event elaborates the same specific task, action, or decision described by the earlier "
+     "event, adding previously missing implementation steps, parameters, or internal details. "
+     "Identify which later information is part of the work described earlier. A shared project or "
+     "technology, temporal proximity, or greater technical detail alone is not enough."),
+    (NONE_LABEL, "none",
+     "两个事件之间缺少可直接确认的细化或因果关系，包括同一项目内的不同任务、并行工作，以及需要额外上下文才能判断的情况。",
+     "No directly confirmable refinement or causal relation exists, including different tasks in "
+     "the same project, parallel work, and cases requiring additional context."),
 )
 
 #: The pre-split defaults.  Adapters pass an :class:`~eventmem_core.settings.EdgePolicy`
@@ -161,7 +187,7 @@ _AXIS_RELS = tuple(rel for rel, *_rest in AXIS_OPTIONS if rel != NONE_LABEL)
 #: What one axis answer actually carries on the wire: the three relations **and** the
 #: real "none" label (the question is sent with ``allow_none: false``).
 _AXIS_WIRE = _AXIS_RELS + (NONE_LABEL,)
-_DETAIL_RELS = tuple(rel for rel, *_rest in DETAIL_OPTIONS)
+_DETAIL_RELS = tuple(rel for rel, *_rest in DETAIL_OPTIONS if rel != NONE_LABEL)
 
 #: English label -> canonical (stored) label, for answers that come back in English.
 _LABEL_BACK = {en: zh for zh, en, *_rest in (AXIS_OPTIONS + DETAIL_OPTIONS)}

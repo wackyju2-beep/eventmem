@@ -267,7 +267,7 @@ def test_decision_questions_switch_and_answers_map_back():
         check_eq(list(options), ["repeat", "change", "negate", "none"], "en option labels")
         _k, _t, detail = nightly._question(nightly.DETAIL_KEY, nightly.DETAIL_TEXT,
                                            nightly.DETAIL_TEXT_EN, nightly.DETAIL_OPTIONS)
-        check_eq(list(detail), ["because", "refine"], "en detail labels")
+        check_eq(list(detail), ["because", "refine", "none"], "en detail labels")
         check("why" in " ".join(detail.values()), "en definitions explain the criterion")
         # 英文标签的答案必须落回中文存储值
         answer = {"choice": "change", "probabilities": {"repeat": 0.1, "change": 0.7,

@@ -203,7 +203,7 @@ def _valid_answer(answer, labels):
     if not nightly._complete_answer(answer, labels):
         return False
     raw = answer['probabilities']
-    if set(raw) != set(labels):
+    if set(raw) != set(labels) and set(raw) != set(labels) | {nightly.NONE_LABEL}:
         return False
     values = list(raw.values()) + [answer['none']]
     try:

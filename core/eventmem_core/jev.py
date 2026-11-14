@@ -176,9 +176,9 @@ class JevClient:
     @staticmethod
     def _allow_none(criteria: dict[str, str]) -> bool:
         """Ask for the server's implicit none only if we did not send one ourselves."""
-        from .providers import NONE_OF_ABOVE
+        from .providers import NONE_LABEL, NONE_OF_ABOVE
 
-        return NONE_OF_ABOVE not in criteria
+        return NONE_OF_ABOVE not in criteria and NONE_LABEL not in criteria
 
     def decide_choice(
         self, state: str, questions: list[tuple[str, str, dict[str, str]]]
