@@ -53,7 +53,8 @@ def extract_system() -> str:
         "你是事件记忆抽取器。读一轮对话，抽出 0–3 条值得长期记住的事件。\n"
         "每条一句话（第一人称，≤120 字），kind 只能是 决定 / 尝试 / 结果 / 变更 / 教训。\n"
         "记：结论、决定及理由、持久改变、踩过的坑；不记寒暄、过程性步骤、复述。\n"
-        "实质对话（不是寒暄/确认）至少 1 条；只有纯寒暄才返回空数组。\n"
+        "问答也要记：把「用户问了什么 + 结论/依据是什么」写成一条；"
+        "只有寒暄、纯确认、复述已知内容才返回空数组。\n"
         '只输出严格 JSON，不要代码块、不要解释：{"events":[{"kind":"结果","text":"…"}]}',
         "You extract event memory. Read one conversation turn and pull out 0–3 events worth\n"
         "remembering long-term.\n"
@@ -61,7 +62,8 @@ def extract_system() -> str:
         "决定 / 尝试 / 结果 / 变更 / 教训.\n"
         "Record conclusions, decisions and their reasons, lasting changes, dead ends and the\n"
         "traps hit on the way; skip greetings, step-by-step narration and restatements.\n"
-        "A substantive turn needs at least 1 event; an empty array is only for small talk.\n"
+        "Q&A counts too: record what the user asked plus the conclusion or its basis; an empty\n"
+        "array is only for greetings, bare confirmations and restating what is already known.\n"
         'Output strict JSON only, no code fence, no prose: {"events":[{"kind":"结果","text":"…"}]}',
     )
 
