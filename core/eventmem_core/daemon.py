@@ -147,7 +147,7 @@ class Daemon:
         return found
 
     def supervised(self) -> list[Pack]:
-        """Only packs named in ``decision.backends`` are ours to start.
+        """Only packs named in ``decision.backends`` are ours to start, in chain order.
 
         Dropping a folder into ``backends/`` must not launch a model; listing it in the
         chain is the explicit opt-in.
@@ -155,18 +155,42 @@ class Daemon:
         names = tuple(getattr(self.settings.decision, "backends", ()) or ())
         if not names:
             return []
-        return [p for p in self.packs() if p.kind == "self" and p.name in names]
+        by_name = {p.name: p for p in self.packs()}
+        return [by_name[name] for name in map(str, names)
+                if name in by_name and by_name[name].kind == "self"]
 
     def prepare(self, _settings: CoreSettings) -> None:
-        """Called by the pass, only when there is work: start what is down."""
+        """Warm the backend this pass will actually use — the first live one in the chain.
+
+        Called by the pass, only when there is work.  The chain is a *fallback order* and
+        one backend serves the whole pass, so warming every pack loads models the pass
+        never asks: two GPU packs cannot even sit on the card at the same time.  Walk the
+        chain in order and return at the first entry that answers (an external pack) or
+        that we manage to start; a refused start (the VRAM gate) falls through to the next.
+        """
         self._auto_started = []
-        for pack in self.supervised():
-            state = runtime.status(pack)
-            if state["running"]:
+        names = tuple(getattr(self.settings.decision, "backends", ()) or ())
+        if not names:
+            return
+        by_name = {p.name: p for p in self.packs()}
+        for name in map(str, names):
+            pack = by_name.get(name)
+            if pack is None:
                 continue
+            if pack.kind != "self":
+                provider = from_pack(pack)
+                try:
+                    if provider is not None and provider.probe():
+                        return          # an external backend is already up; nothing to warm
+                except Exception:  # noqa: BLE001 - a broken probe is just "not this one"
+                    pass
+                continue
+            if runtime.status(pack)["running"]:
+                return
             try:
                 runtime.start(pack, probe=_probe_of(pack))
                 self._auto_started.append(pack)
+                return
             except Exception as exc:  # noqa: BLE001 - a backend that will not start is skipped
                 _log.warning("eventmem daemon: %s", exc)
 

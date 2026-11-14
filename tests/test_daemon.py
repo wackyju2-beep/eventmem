@@ -453,6 +453,65 @@ def test_prepare_only_touches_packs_in_the_chain():
         shutil.rmtree(root, ignore_errors=True)
 
 
+@case
+def test_prepare_starts_the_chain_head_and_stops_there():
+    root = Path(tempfile.mkdtemp(prefix="eventmem-prepare-order-"))
+    db = fresh_db()
+    try:
+        for name in ("aaa", "zzz"):
+            folder = make_pack(root, name, "protocol: systemone\nweights: model.gguf\n")
+            (folder / "model.gguf").write_bytes(b"x")
+        # Discovery order would start "aaa" first; the chain puts "zzz" at the head.
+        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("zzz", "aaa")))
+
+        started: list[str] = []
+        original = runtime.start
+        runtime.start = lambda pack, **kw: started.append(pack.name) or {}
+        try:
+            daemon.prepare(daemon.settings)
+        finally:
+            runtime.start = original
+        check_eq(started, ["zzz"], "only the chain head is warmed; warming the rest loads models the pass never asks")
+    finally:
+        remove(db)
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@case
+def test_prepare_falls_through_when_the_head_refuses_to_start():
+    root = Path(tempfile.mkdtemp(prefix="eventmem-prepare-fall-"))
+    db = fresh_db()
+    try:
+        for name in ("aaa", "zzz"):
+            folder = make_pack(root, name, "protocol: systemone\nweights: model.gguf\n")
+            (folder / "model.gguf").write_bytes(b"x")
+        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("zzz", "aaa")))
+
+        started: list[str] = []
+        original = runtime.start
+
+        def fake_start(pack, **kw):
+            if pack.name == "zzz":
+                raise RuntimeError("zzz: 启动脚本退出（exit 1）")   # the VRAM gate said no
+            started.append(pack.name)
+            return {}
+
+        runtime.start = fake_start
+        try:
+            daemon.prepare(daemon.settings)
+        finally:
+            runtime.start = original
+        check_eq(started, ["aaa"], "a head that refuses to start falls through to the next entry in the chain")
+        check_eq([p.name for p in daemon._auto_started], ["aaa"], "release only stops what this pass actually started")
+    finally:
+        remove(db)
+        import shutil
+
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------- pass wiring
 
 @case
