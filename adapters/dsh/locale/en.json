@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "eventmem memory",
-    "description": "Shared long-term event memory for this host: one recall block per turn, seven memory tools, a turn-end extractor, and a native memory console (overview / backends / models / schedule / logs / graph) under 插件 in the sidebar — all over the eventmem daemon's /api/mem/* data plane. Writes are tagged agent=dsh with dsh:-prefixed sessions; a dead tunnel degrades to no memory instead of failing the turn.",
+    "description": "Shared event memory with recall, seven tools, turn-end extraction and the memory console under Plugins in the sidebar. This bundle is only a client: install and start the eventmem daemon separately. Its API and console have no built-in authentication; keep them private. Extraction can make an additional host-model request. If the daemon is unreachable, automatic memory is skipped rather than blocking the turn.",
     "detail": "docs/DETAIL.md"
   }
 }

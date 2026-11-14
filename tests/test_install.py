@@ -14,11 +14,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
 import traceback
 import urllib.request
+from unittest import SkipTest
 import tarfile
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -181,6 +184,45 @@ def llama_targz() -> bytes:
         info.size = len(data)
         bundle.addfile(info, io.BytesIO(data))
     return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------- Windows launcher
+
+@case
+def test_windows_launcher_pins_loopback_host():
+    # Evaluate only the launcher's pure command-generation block, never the installer:
+    # running the latter can start/stop the user's real daemon or alter autostart.
+    if os.name == "nt":
+        shell = shutil.which("powershell.exe") or shutil.which("pwsh")
+        check(shell is not None, "PowerShell is required to test the Windows launcher")
+    else:
+        shell = shutil.which("pwsh")
+        if not shell:
+            raise SkipTest("PowerShell is unavailable")
+    script = (REPO / "install.ps1").read_text(encoding="utf-8")
+    start = script.index("$runPy = Join-Path $RepoRoot 'adapters\\hermes\\run.py'")
+    end_marker = "$cmdLines += $runLine"
+    end = script.index(end_marker, start) + len(end_marker)
+    block = script[start:end]
+    env = os.environ.copy()
+    env["EVENTMEM_DAEMON_HOST"] = "0.0.0.0"
+    env["EVENTMEM_TEST_REPO"] = str(REPO)
+    prelude = (
+        "$RepoRoot = $env:EVENTMEM_TEST_REPO; $HomeDir = 'C:\\home with spaces'; "
+        "$PyExe = 'C:\\home with spaces\\python.exe'; "
+        "$DbPath = 'C:\\home with spaces\\events.db'; "
+        "$LogPath = 'C:\\home with spaces\\daemon.log'; $Port = 12345\n"
+    )
+    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
+                             prelude + block + "\n$cmdLines | ConvertTo-Json -Compress"],
+                            capture_output=True, text=True, env=env, check=True)
+    lines = json.loads(result.stdout)
+    run_py = REPO / "adapters" / "hermes" / "run.py"
+    check_eq(lines[-1], '"C:\\home with spaces\\python.exe" '
+             f'"{run_py}" daemon '
+             '--db "C:\\home with spaces\\events.db" --host 127.0.0.1 --port 12345 '
+             '>> "C:\\home with spaces\\daemon.log" 2>&1',
+             "generated command pins loopback despite inherited EVENTMEM_DAEMON_HOST")
 
 
 # --------------------------------------------------------------------------- picking
@@ -518,10 +560,13 @@ def test_manifest_lists_what_is_installed(capsys=None):
 
 
 def main() -> int:
-    passed = failed = 0
+    passed = failed = skipped = 0
     for fn in CASES:
         try:
             fn()
+        except SkipTest as exc:
+            skipped += 1
+            print(f"SKIP {fn.__name__}: {exc}")
         except Exception:
             failed += 1
             print(f"FAIL {fn.__name__}")
@@ -529,7 +574,7 @@ def main() -> int:
         else:
             passed += 1
             print(f"PASS {fn.__name__}")
-    print(f"PASS {passed} / FAIL {failed}")
+    print(f"PASS {passed} / FAIL {failed} / SKIP {skipped}")
     return 1 if failed else 0
 
 

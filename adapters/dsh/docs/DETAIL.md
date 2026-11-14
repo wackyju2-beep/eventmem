@@ -1,9 +1,126 @@
 # eventmem memory for DeepSeek Harness
 
-This plugin gives the Harness a shared, long-term event memory without giving it the
-database. The library normally lives on the same machine; when the Harness runs somewhere
-else it lives there instead, behind an SSH tunnel. In both cases the daemon exposes a thin
-REST mirror of the core (`/api/mem/*`), and this plugin is a client of that mirror.
+This plugin is a **client only**: it does not install or start the separate eventmem
+daemon, database, or models. The daemon owns the database and exposes `/api/mem/*`; it may
+run on the same machine as DSH or on another machine reached over SSH. Both agents must
+use the same database to share memory.
+
+## Get started on Windows
+
+1. Install DSH, Git, and Python 3.11+ (SQLite needs FTS5 and its trigram tokenizer). In
+   PowerShell clone the public repository and install the daemon:
+
+   ```powershell
+   git clone https://github.com/wackyju2-beep/eventmem.git D:\eventmem
+   cd D:\eventmem
+   .\install.cmd
+   ```
+
+   The installer creates a virtual environment, installs core plus the optional vector
+   runtime, starts a loopback daemon on port 9123, configures login autostart, and runs a
+   self-check. It may use `winget` to install Python 3.12 if Python is missing. Data defaults
+   to `%USERPROFILE%\.hermes\eventmem` or `%HERMES_HOME%\eventmem`. A newly generated or
+   updated launcher explicitly uses `--host 127.0.0.1`; an already running daemon may still
+   use an old launcher, so check its actual listener. If the installer warns `daemon.cmd`
+   needs an update, first check affected processes and autostart entries: `-Uninstall`
+   forcibly stops matching `python.exe` processes whose command lines contain `run.py`,
+   `daemon`, and the configured database path, including other services using that database.
+   It also deletes the `eventmem-daemon` scheduled task and Startup shortcut with that name;
+   the data is kept. After confirming it is safe, run `.\install.cmd -Uninstall` in
+   PowerShell from the repository. Task deletion and process-stop errors are silently ignored;
+   do not rely on the success message. Check that the target PIDs, fixed-name scheduled task
+   and Startup shortcut are actually gone. Then rerun `.\install.cmd` to regenerate the
+   launcher and check its actual listening address. Options include `-NoPythonInstall`,
+   `-NoVector`, and `-NoAutostart`. Newly generated launch commands
+   explicitly bind to loopback; check an already-running daemon's actual listener separately.
+2. In DSH open **Plugins → Add plugin** and select `D:\eventmem\adapters\dsh` from the
+   clone. Strictly local use calls for `tunnel: false`. Currently the defaults are
+   `tunnel: true` and `tunnelHost: mint`: `mint` is an example SSH alias, not a service
+   supplied by this plugin. If the endpoint on port 9123 returns a successful HTTP response
+   with a truthy JSON value to the probe, the plugin adopts it; otherwise the defaults may
+   try SSH to `mint`. The bundle has no Config schema and
+   no plugin configuration form. Changing options requires someone familiar with DSH profiles
+   to override the mounted `eventmem` row through a higher-level profile patch. `config` is
+   replaced as a whole, not merged, so retain the other fields in the bundle's
+   `cordis.patch.yml` when writing the replacement. See the example below; ask someone
+   familiar with profile editing if needed.
+3. Check `Invoke-RestMethod http://127.0.0.1:9123/api/health` in PowerShell; manually
+   inspect `status`, `schema`, and `db` and compare `db` with the intended database. These
+   fields do not authenticate the responding server. The installer also runs a self-check.
+   Open **记忆后台** in DSH to inspect the daemon.
+
+Basic storage and literal recall need no relation judge. Turn-end extraction needs a
+working DSH host model; `auxProvider` and `auxModel` can be set if the session has no
+model selection. Semantic recall additionally requires the vector runtime and the
+Qwen3-Embedding-0.6B ONNX `tokenizer.json` and `model_int8.onnx` in
+`<HERMES_HOME>\eventmem\models` (default `%USERPROFILE%\.hermes\eventmem\models`).
+Automatic relations require a running daemon and a configured decision backend; use the
+memory console to configure a backend or download a model. See
+[backend setup](https://github.com/wackyju2-beep/eventmem/blob/main/docs/backends.md).
+
+### Profile configuration example
+
+There is no plugin configuration form. Back up the active profile's `cordis.patch.yml`
+before editing. Its path is `<DSH_HOME>/profiles/<profile>/cordis.patch.yml`; on Windows
+`DSH_HOME` defaults to `%USERPROFILE%\.dsh` unless the environment variable is set.
+`desktop` is an example profile, not necessarily the active one: consult your DSH profile
+documentation. Preserve existing rows and comments. If the file contains only `[]`,
+replace the empty list with the sequence below; if an `eventmem` override already exists,
+update it instead of duplicating its ID. For a local daemon append this top-level item:
+
+```yaml
+- id: eventmem
+  name: dsh-eventmem
+  config:
+    baseUrl: http://127.0.0.1:9123
+    agent: dsh
+    lang: zh
+    tunnel: false
+    tunnelHost: mint
+    tunnelLocalPort: 9123
+    tunnelRemotePort: 9123
+```
+
+`config` is replaced as a whole: preserve these fields and any custom fields you need.
+For remote use change `tunnel` to `true` and `tunnelHost` to the remote passwordless SSH
+alias. If local port 9123 is occupied, change both `baseUrl` and `tunnelLocalPort` to an
+unused port, and keep `tunnelRemotePort` aligned with the remote daemon. Higher-priority
+layers may override this patch. Same-ID replacement without a deep merge was verified with
+`dump-config` in an isolated profile, not with an active plugin; confirm the effective
+configuration and connection in your host.
+
+### Linux or a remote shared database
+
+The [repository quick start](https://github.com/wackyju2-beep/eventmem/blob/main/README.md) covers
+Linux/Hermes installation and starting its daemon; `install.sh` only links adapters and does
+not start a service. On the remote machine run one daemon for the same database Hermes
+uses. Remote use requires `tunnel: true` and `tunnelHost` set to a working passwordless
+SSH alias for that machine; ask someone familiar with profile patches to make the override
+as described above.
+
+**A local daemon on 9123 can take precedence over SSH.** The automatic probe only requires
+a successful HTTP response with a truthy JSON value; it does not validate daemon fields or
+prove that DSH is connected to the remote database. Either stop the local daemon and remove
+its autostart after checking the effects of `.\install.cmd -Uninstall` as described above
+(it can stop other matching services; data is retained), or use an unused local port, e.g.
+`baseUrl: http://127.0.0.1:9124` and
+`tunnelLocalPort: 9124`, with `tunnelRemotePort: 9123` when the remote daemon uses 9123.
+Manually inspect `/api/health` fields `status`, `schema`, and `db` on the chosen endpoint
+and compare `db` with the intended remote database; this does not authenticate the responder.
+Test sharing by recording a distinctive event and retrieving it on the other
+host. Do not place SQLite/WAL on a network share. Run only one daemon per database: Windows
+lacks the daemon's `flock` single-instance guard, so it cannot be relied on to prevent a
+second daemon from opening the same database. The
+[DSH adapter guide](https://github.com/wackyju2-beep/eventmem/blob/main/adapters/dsh/README.md)
+has the configuration fields.
+
+**Security:** the daemon API and management console have no built-in authentication or
+TLS, including for local users and processes that can reach loopback. Keep the daemon on
+loopback, trust or isolate local accounts and processes, and use SSH for remote access; do
+not expose it to an untrusted network. `EVENTMEM_DAEMON_HOST` changes the daemon's default
+bind address unless an explicit `--host` is supplied; check existing processes and their
+actual listening addresses. SSH `-L` listening also depends on the client's `GatewayPorts`
+setting, so verify the actual forwarded listener is loopback-only. See the [API guide](https://github.com/wackyju2-beep/eventmem/blob/main/docs/api.md).
 
 ## What you get
 
@@ -55,9 +172,10 @@ the second turn of a session show `#id 同上文` pointers instead of repeating 
 ## The tunnel it owns
 
 `tunnel: true` makes the plugin responsible for the SSH forwarding rather than relying on
-an external supervisor. On activation it probes the data plane: if something already
-answers, that tunnel is adopted; otherwise it starts `ssh -N -L …` itself and confirms the
-forwarding a few seconds later. If that ssh dies, it is respawned with bounded backoff; on
+an external supervisor. On activation it probes `/api/health`: a successful HTTP response
+with any truthy JSON value is treated as an existing endpoint and adopted, without validating
+`status`, `schema`, or `db` or authenticating the responder. Otherwise it starts
+`ssh -N -L …` itself and probes again a few seconds later. If that ssh dies, it is respawned with bounded backoff; on
 plugin unload the ssh it started is terminated. A tunnel it did not start is never killed.
 The spawned ssh keeps its stdin as an open pipe, so a hard-killed Harness makes it exit on
 EOF instead of leaving an orphan (verified).
@@ -82,5 +200,6 @@ than a turn:
 
 ## Configuration
 
-The mounted row is named `eventmem` and lives in the bundle's `cordis.patch.yml`. The
-only field most setups touch is `baseUrl` (the local end of the SSH tunnel) and `agent`.
+The mounted row is named `eventmem` and lives in the bundle's `cordis.patch.yml`.
+`baseUrl` is the local daemon endpoint or local end of the SSH tunnel; `agent` labels
+writes. Choose `tunnel`, `tunnelHost`, and ports as described above for your deployment.
