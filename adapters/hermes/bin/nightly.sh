@@ -24,7 +24,7 @@ fi
 # ahead of its own venv shadows huggingface_hub and breaks transformers.
 unset PYTHONPATH
 
-START_SCRIPT="${EVENTMEM_START_SCRIPT:-$HOME/models/startlux/start.sh}"
+START_SCRIPT="${EVENTMEM_START_SCRIPT:-}"
 URL="${EVENTMEM_JEV_URL:-http://127.0.0.1:18090}"
 
 OWN_SERVICE=0

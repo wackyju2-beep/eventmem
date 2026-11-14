@@ -53,7 +53,7 @@ def _model_ids(body: Any) -> Optional[set[str]]:
     """Model ids from an OpenAI-ish listing.
 
     ``None`` means "this is not a listing I understand" — then a probe can only judge
-    liveness, never the id (an older server, or a shim like StartLux).
+    liveness, never the id (an older server, or a shim with no listing).
     """
     if not isinstance(body, dict):
         return None

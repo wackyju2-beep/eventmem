@@ -33,7 +33,7 @@ class BackfillTests(unittest.TestCase):
         self.store = Store(':memory:')
         self.addCleanup(self.store.close)
 
-    def test_startlux_wire_conditional_backfill_converts_confidence(self):
+    def test_conditional_wire_backfill_converts_confidence(self):
         import json
         from unittest.mock import patch
         from eventmem_core.jev import JevClient

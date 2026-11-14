@@ -46,7 +46,7 @@ const check = (cond, message) => {
 const now = Math.floor(Date.now() / 1000)
 const state = {
   pairs: 13,
-  backend: 'startlux',
+  backend: 'local-judge',
   paused: false,
   backfill: { state: 'idle', pairs: 0, edges: 0, result: null, error: '', started: 0, finished: 0 },
   calls: [],
@@ -73,8 +73,8 @@ function reply(route, body) {
       return {
         ok: true, paused: state.paused, busy: true, live,
         backfill: state.backfill,
-        runs: [{ ts: now - 600, pairs: 54, edges: 3, backend: 'startlux' }],
-        backends: [{ name: 'startlux', kind: 'external' }, { name: 'win-autothink-gpu', kind: 'self' }],
+        runs: [{ ts: now - 600, pairs: 54, edges: 3, backend: 'local-judge' }],
+        backends: [{ name: 'local-judge', kind: 'external' }, { name: 'win-autothink-gpu', kind: 'self' }],
         cursor: { behind: 2.6, events: 9 },
       }
     case 'stats':
@@ -200,7 +200,7 @@ async function main() {
   check(body.includes('第 2/26 个事件'), 'pending subtitle reports the walk through this pass')
   check(body.includes('已判 13 对（预计）'), 'pending subtitle reports judged pairs')
   check(widgets('.emc-live').length === 1, 'live strip is on the page')
-  check(text().includes('startlux'), 'live strip names the backend')
+  check(text().includes('local-judge'), 'live strip names the backend')
 
   // ---- 直播条：+N 增量闪 ----------------------------------------------------
   state.pairs = 15

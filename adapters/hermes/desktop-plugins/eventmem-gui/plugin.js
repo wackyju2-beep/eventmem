@@ -1588,7 +1588,7 @@ function Schedule({ ctx, notify }) {
           jsx('div', { className: 'emg-sub', children: t(kind === 'recalibrate'
             ? '只重判已有概率的关系；无法使用的记录会跳过。预览不会修改历史。'
             : '重新选择历史候选需要 Jev 模型判定；耗时和成本不确定。预览不会启动任务。') }),
-          kind === 'recalibrate' ? jsx('div', { className: 'emg-sub', children: t('历史概率格式有歧义，模型来源未知。StartLux 输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。') }) : null,
+          kind === 'recalibrate' ? jsx('div', { className: 'emg-sub', children: t('历史概率格式有歧义，模型来源未知。部分后端输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。') }) : null,
           kind === 'recalibrate' ? jsxs('label', { children: [jsx('input', { type: 'checkbox', checked: conditional, onChange: (event) => { conditionalRef.current = event.target.checked; setConditional(event.target.checked); setPreviews((old) => ({ ...old, recalibrate: null })) } }), ' ', t('将条件形式的历史概率按条件概率处理')] }) : null,
           kind === 'backfill' ? jsx('div', { className: 'emg-sub', children: t('补算使用已保存的关系阈值，不使用未保存的阈值编辑；候选参数使用当前表单。') }) : null,
           jsxs('div', { className: 'emg-row wrap', style: { marginTop: 8 }, children: [

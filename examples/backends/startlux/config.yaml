@@ -1,8 +1,0 @@
-# The judge I already run as a service (start.sh, systemd, whatever).
-# Copy this folder into ~/.hermes/eventmem/backends/ and list "startlux" in decision.backends.
-# Nothing here starts or stops it: external: true means "someone else owns the process".
-protocol: systemone
-model: StartLux-Decision-v1.1-4B-Instant
-external: true
-base_url: http://127.0.0.1:18090
-note: 本机的 4B Instant，start.sh 起的服务

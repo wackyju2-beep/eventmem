@@ -198,7 +198,7 @@ def test_probe_check_model_requires_the_id():
     time, mid-round, and every later round fails the same way: the chain never falls back.
     """
     provider = decision.UrlProvider(
-        endpoint(model="StartLux-Decision-v1.1-4B-AutoThink", check_model=True)
+        endpoint(model="local-judge-4b", check_model=True)
     )
     fake = FakeTransport({
         "http://127.0.0.1:9/v1/models": (200, json.dumps({"data": [
@@ -215,9 +215,9 @@ def test_probe_check_model_requires_the_id():
 def test_probe_check_model_accepts_a_model_that_is_not_loaded():
     """The whole point of JIT: an unloaded model is still a usable backend."""
     provider = decision.UrlProvider(
-        endpoint(model="StartLux-Decision-v1.1-4B-AutoThink", check_model=True)
+        endpoint(model="local-judge-4b", check_model=True)
     )
-    body = json.dumps({"data": [{"id": "StartLux-Decision-v1.1-4B-AutoThink", "object": "model"}]})
+    body = json.dumps({"data": [{"id": "local-judge-4b", "object": "model"}]})
     fake = FakeTransport({"http://127.0.0.1:9/v1/models": (200, body.encode())})
     with transport_of(fake):
         check_eq(provider.probe(), True, "listed but not loaded is fine")
@@ -430,14 +430,14 @@ def test_from_settings_reports_a_missing_pack_and_falls_back():
 def test_from_settings_skips_a_self_pack_until_the_daemon_exists():
     root = Path(tempfile.mkdtemp(prefix="eventmem-selfpack-"))
     try:
-        folder = root / "startlux"
+        folder = root / "local-judge"
         folder.mkdir()
         (folder / "model.gguf").write_bytes(b"x")
         (folder / "config.yaml").write_text(
             "protocol: systemone\nweights: model.gguf\n", encoding="utf-8")
         warnings: list[str] = []
         settings = CoreSettings(decision=DecisionPolicy(
-            url="http://legacy:1", backends=("startlux",), packs_dir=str(root)))
+            url="http://legacy:1", backends=("local-judge",), packs_dir=str(root)))
         chain = decision.from_settings(settings, warn=warnings.append)
         check_eq([p.name for p in chain.providers], ["default"], "no address yet")
         check(any("回落" in w for w in warnings), f"fallback is explained: {warnings}")

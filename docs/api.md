@@ -37,7 +37,7 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 {"status": "ok", "service": "eventmem-daemon", "api": 1, "schema": 12,
  "instance_id": "…", "db_id": "0123456789abcdef", "uptime": 42.0,
  "auth": "none", "capabilities": {"embedding": false, "decision": true},
- "pid": 1234, "db": "…/events.db", "packs_dir": "…", "backends": ["startlux"],
+ "pid": 1234, "db": "…/events.db", "packs_dir": "…", "backends": ["local-judge"],
  "paused": false}
 ```
 

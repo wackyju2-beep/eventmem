@@ -1,0 +1,8 @@
+# A judge you already run as a service (start.sh, systemd, a container, whatever).
+# Copy this folder into ~/.hermes/eventmem/backends/ and list "local-judge" in decision.backends.
+# Nothing here starts or stops it: external: true means "someone else owns the process".
+protocol: systemone
+model: local-judge
+external: true
+base_url: http://127.0.0.1:18090
+note: a 4B judge on this machine, started outside eventmem

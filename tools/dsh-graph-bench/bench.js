@@ -47,7 +47,7 @@ const ROUTES = {
   health: { status: 'ok', schema: 12, pid: 424242 },
   status: {
     ok: true, paused: false, busy: false,
-    live: { backend: 'startlux', pairs: 0, edges: 0, events_total: graph.events.length, pairs_planned: 0, since: now, updated: now },
+    live: { backend: 'local-judge', pairs: 0, edges: 0, events_total: graph.events.length, pairs_planned: 0, since: now, updated: now },
     backfill: { state: 'idle', pairs: 0, edges: 0, result: null, error: '', started: 0, finished: 0 },
     runs: [], backends: [], cursor: { behind: 0, events: 0 },
   },

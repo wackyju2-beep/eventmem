@@ -7,7 +7,7 @@ provider list inside the plugin, but **a folder with a `config.yaml` in it**.
 
 ```
 ~/.hermes/eventmem/backends/
-  startlux/config.yaml      # my 4B, already running as a service
+  local-judge/config.yaml  # a judge you already run as a service
   lev/config.yaml          # weights I let eventmem launch
   typesafe/config.yaml     # the hosted judge
 ```
@@ -70,9 +70,10 @@ Rules, all of them about **not mixing models inside one pass**:
   threshold, and `edges.backend` records which one wrote each edge so you can recalibrate later.
 - `401`/`403` mark the pack `needs_key` for that pass instead of retrying it.
 - An **empty** `decision.backends` means the v2.1 behaviour: the single endpoint at `decision.url`.
-  That mode still works and is what a deployment with one `start.sh` uses. Filling the chain retires
-  it — `decision.url` is then no longer consulted, so list every backend you want, including the
-  local one.
+  That mode still works and is what a deployment with one `start.sh` uses; point
+  `decision.start_script` (or `EVENTMEM_START_SCRIPT`) at that script, because no default path is
+  assumed. Filling the chain retires it — `decision.url` is then no longer consulted, so list every
+  backend you want, including the local one.
 
 ## Installing one
 
@@ -120,7 +121,7 @@ the flag with a warning: they derive the id from the weights filename.
 
 ```yaml
 protocol: systemone
-model: StartLux-Decision-v1.1-4B-AutoThink
+model: your-model-id
 external: true
 base_url: http://192.168.1.50:1234
 check_model: true

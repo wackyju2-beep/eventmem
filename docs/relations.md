@@ -26,4 +26,4 @@ Historical thresholds can be recalibrated from saved distributions, subject to t
 
 ## Historical measurement
 
-An earlier version was measured on a six-core mini PC without a GPU using StartLux 4B Instant Q8_0 (4.48 GB): approximately 6.7 seconds per pair on six threads, or 16–18 seconds on two threads. This is a historical observation, not a current benchmark or a guarantee for other models, prompts, versions or hardware.
+An earlier version was measured on a six-core mini PC without a GPU using a 4B decision model quantised to Q8_0 (4.48 GB): approximately 6.7 seconds per pair on six threads, or 16–18 seconds on two threads. This is a historical observation, not a current benchmark or a guarantee for other models, prompts, versions or hardware.

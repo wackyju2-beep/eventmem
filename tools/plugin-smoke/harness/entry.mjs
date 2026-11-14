@@ -47,7 +47,7 @@ const STATUS = {
     { ts: T0 + 60, skipped: 'idle' }, { ts: T0, skipped: 'idle' }, { ts: T0 - 60, skipped: 'idle' },
     { ts: T0 - 120, skipped: 'idle' }, { ts: T0 - 180, skipped: 'idle' }
   ],
-  backends: [{ name: 'startlux', kind: 'self', running: true, port: 18090, in_chain: true }],
+  backends: [{ name: 'local-judge', kind: 'self', running: true, port: 18090, in_chain: true }],
   live: null, backfill: { state: 'idle' }, busy: false, stopping: false, down: {}
 }
 
@@ -55,7 +55,7 @@ const PAYLOAD = {
   '/api/health': { status: 'ok', pid: 873078, schema: 9, instance_id: 'inst-1',
                    db: '/home/user/.hermes/eventmem/events.db' },
   '/api/i18n': { lang: 'zh', map: {} },
-  '/api/config': { effective: { edges: edgesConfig, decision: { backends: ['startlux', 'win-autothink'] } },
+  '/api/config': { effective: { edges: edgesConfig, decision: { backends: ['local-judge', 'win-autothink'] } },
                    file: '/home/user/.hermes/eventmem/settings.yaml', overrides: { edges: {} }, writable: true },
   '/api/status': null,
   '/api/logs': { logs: [{ ts: T0, level: 'INFO', name: 'eventmem.daemon', message: 'eventmem daemon: ok' }] },
@@ -99,7 +99,7 @@ const ctx = {
       const done = Math.round((pairs - 3254) / 3)
       return Promise.resolve(live
         ? { ...STATUS, busY: true, busy: true,
-            live: { backend: 'startlux', pairs: done, edges: edges - 2381,
+            live: { backend: 'local-judge', pairs: done, edges: edges - 2381,
                     since: Date.now() / 1000 - 42,
                     event_index: Math.min(445, 72 + done * 2), events_total: 445,
                     pairs_planned: 3572 } }

@@ -8,7 +8,7 @@ shaping and ``packs`` is manifest parsing.  The point is to pin the two facts th
 builder silently depends on:
 
 * a System One payload is byte-for-byte what ``JevClient`` already sends (so swapping in
-  the new layer cannot change what the running StartLux service sees);
+  the new layer cannot change what the running judge service sees);
 * an OpenAI Decisions payload carries an **explicit ``none`` choice**, because that schema
   has no ``none_probability`` slot and without it every edge gets looser.
 """
@@ -336,13 +336,13 @@ def test_unknown_protocol_is_a_programming_error():
 
 @case
 def test_self_pack_defaults():
-    pack = packs.from_mapping("startlux-4b", "/tmp/backends/startlux-4b",
+    pack = packs.from_mapping("local-judge-4b", "/tmp/backends/local-judge-4b",
                               {"protocol": "systemone", "weights": "model.gguf"})
     check_eq(pack.kind, "self", "weights -> self")
     check_eq(pack.launch, "auto", "launch defaults to auto")
     check_eq(pack.port, 0, "port 0 = let the daemon pick one")
     check_eq(pack.model, "model", "model defaults to the weight file stem")
-    check_eq(pack.weights, "/tmp/backends/startlux-4b/model.gguf", "weights are resolved")
+    check_eq(pack.weights, "/tmp/backends/local-judge-4b/model.gguf", "weights are resolved")
     check_eq(pack.args, (), "no args by default")
 
 
@@ -500,7 +500,7 @@ def test_check_model_is_opt_in_and_ignored_for_self_packs():
     warned: list[str] = []
     pack = packs.from_mapping(
         "win-autothink", "/tmp/b/win-autothink",
-        {"protocol": "systemone", "model": "StartLux-Decision-v1.1-4B-AutoThink",
+        {"protocol": "systemone", "model": "local-judge-4b",
          "base_url": "http://192.168.1.50:1234", "external": True, "check_model": True},
         warn=warned.append,
     )
@@ -508,7 +508,7 @@ def test_check_model_is_opt_in_and_ignored_for_self_packs():
     check_eq(warned, [], "no warnings")
 
     plain = packs.from_mapping(
-        "startlux", "/tmp/b/startlux",
+        "local-judge", "/tmp/b/local-judge",
         {"protocol": "systemone", "model": "jev", "base_url": "http://127.0.0.1:18090",
          "external": True},
     )
@@ -537,12 +537,12 @@ def test_the_examples_are_real_packs():
     missing_weights = [p for p in problems if "权重文件不存在" in p]
     check_eq([p for p in problems if p not in missing_weights], [], "the example configs parse cleanly")
     check_eq(len(missing_weights), 1, "and only lev refers to weights that are not in the repo")
-    check_eq(sorted(p.name for p in found), ["lev", "lmstudio", "startlux", "typesafe"],
+    check_eq(sorted(p.name for p in found), ["lev", "lmstudio", "local-judge", "typesafe"],
              "one example per shape")
     by_name = {p.name: p for p in found}
     check_eq(by_name["lev"].kind, "self", "lev: we launch it")
     check_eq(by_name["lev"].launch, "auto", "and we launch the llama.cpp we installed")
-    check_eq(by_name["startlux"].kind, "external", "startlux: someone else runs it")
+    check_eq(by_name["local-judge"].kind, "external", "local-judge: someone else runs it")
     check_eq(by_name["lmstudio"].kind, "external", "lmstudio: same shape")
     check_eq(by_name["typesafe"].kind, "remote", "typesafe: hosted")
     check_eq(by_name["typesafe"].base_url, "https://api.typesafe.ai", "the documented endpoint")

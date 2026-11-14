@@ -11,8 +11,8 @@ Formats
     ``questions`` **object** keyed by question id.  Served by llama.cpp (upstream since
     the /v1/systemone merge), LM Studio ("Jev Compatibility"), and the hosted API.
     ``allow_none`` makes the server append its own "none of the above" option, returned
-    as ``none_probability``. StartLux renormalises the other options conditionally;
-    other System One servers may return unconditional values. Complete sums determine
+    as ``none_probability``. A server may renormalise the other options conditionally
+    or return unconditional values; both shapes are accepted. Complete sums determine
     the scale when unambiguous, and near-overlap is rejected rather than guessed.
 
 ``openai-decisions``

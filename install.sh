@@ -61,7 +61,7 @@ Next steps
      in `plugins.enabled` (code-execution gate). Forgetting it mounts nothing and the GUI page
      comes back empty.
   2. the model service (optional, edges only): systemd unit running
-       $HOME/models/startlux/start.sh
+       $HOME/models/local-judge/start.sh
   3. the daemon (edges + the GUI), one per database:
        systemctl --user edit eventmem-worker
        ExecStart=%h/.hermes/hermes-agent/.venv/bin/python $REPO/adapters/hermes/run.py daemon --db %h/.hermes/eventmem/events.db

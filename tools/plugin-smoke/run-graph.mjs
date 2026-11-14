@@ -14,10 +14,10 @@ const shapes = {
   empty: { events: [], edges: [], projects: [] },
   two: {
     events: [
-      { id: 1, kind: '决定', text: '用 startlux', project: 'eventmem', ts: 1794419860, project_id: 1 },
+      { id: 1, kind: '决定', text: '用 local-judge', project: 'eventmem', ts: 1794419860, project_id: 1 },
       { id: 2, kind: '结果', text: '链路切好了', project: 'eventmem', ts: 1794420000, project_id: 1 }
     ],
-    edges: [{ src: 2, dst: 1, relation: '细化', probs: [0.7, 0.2], backend: 'startlux' }],
+    edges: [{ src: 2, dst: 1, relation: '细化', probs: [0.7, 0.2], backend: 'local-judge' }],
     projects: [{ id: 1, name: 'eventmem' }]
   }
 }

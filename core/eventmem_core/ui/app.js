@@ -626,7 +626,7 @@ historyCard.className = 'card';
 historyCard.style.marginTop = '14px';
 historyCard.innerHTML = `<h2 data-st="历史关系重校准">历史关系重校准</h2>
   <p class="hint" data-st="只重判已有概率的关系；无法使用的记录会跳过。预览不会修改历史。"></p>
-  <p class="hint" data-st="历史概率格式有歧义，模型来源未知。StartLux 输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。"></p>
+  <p class="hint" data-st="历史概率格式有歧义，模型来源未知。部分后端输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。"></p>
   <label><input type="checkbox" id="recal-conditional"> <span data-st="将条件形式的历史概率按条件概率处理"></span></label>
   <div class="row"><button class="btn" id="recal-preview" data-st="预览历史"></button><button class="btn" id="recal-apply" data-st="应用历史重校准" disabled></button></div><pre id="recal-result"></pre>
   <h2 data-st="历史候选补算">历史候选补算</h2>

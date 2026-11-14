@@ -46,7 +46,7 @@ const CANNED = {
   },
   '/api/status': {
     cursor: { events: 0, behind: 42 },
-    runs: [{ ts: 1794419860, pairs: 2, edges: 1, backend: 'startlux' }, { ts: 1794419000, skipped: 'no work' }],
+    runs: [{ ts: 1794419860, pairs: 2, edges: 1, backend: 'local-judge' }, { ts: 1794419000, skipped: 'no work' }],
     // A pass in flight: this is what the live strip reads (backend, counters, stop flag).
     live: { backend: 'win-autothink', pairs: 12, edges: 9, since: 1794420000, updated: 1794420030 },
     busy: true,
@@ -55,7 +55,7 @@ const CANNED = {
   '/api/config': {
     file: '/home/x/.hermes/eventmem/settings.yaml',
     effective: {
-      decision: { backends: ['startlux', 'typesafe'] },
+      decision: { backends: ['local-judge', 'typesafe'] },
       edges: {
         heads_vec_top_k: 10, heads_cos_min: 0.35, margin: 0.15, session_heads_top_k: 10,
         unclosed_lessons: 2, decision_skeleton: 5, cross_top_k: 3, cross_cos_min: 0.7, poll_seconds: 60
@@ -67,7 +67,7 @@ const CANNED = {
     problems: [],
     packs: [
       {
-        name: 'startlux', kind: 'external', protocol: 'systemone', model: 'jev',
+        name: 'local-judge', kind: 'external', protocol: 'systemone', model: 'jev',
         url: 'http://127.0.0.1:18090', in_chain: true, running: null, needs_key: false,
         license: 'apache-2.0', config: 'protocol: systemone\nmodel: jev\n'
       },
@@ -90,7 +90,7 @@ const CANNED = {
   '/api/job': { job: { state: 'running', phase: 'lev-Q4_K_M.gguf', done: 1.1e9, total: 2.4e9 } },
   '/api/logs': {
     logs: [
-      { ts: 1794419860, level: 'INFO', name: 'eventmem.daemon', message: 'pass done pairs=2 edges=1 backend=startlux' },
+      { ts: 1794419860, level: 'INFO', name: 'eventmem.daemon', message: 'pass done pairs=2 edges=1 backend=local-judge' },
       { ts: 1794419800, level: 'WARNING', name: 'eventmem.decision', message: 'typesafe unavailable (needs_key)' },
       { ts: 1794419700, level: 'ERROR', name: 'eventmem.worker', message: 'boom\nsecond line' }
     ]

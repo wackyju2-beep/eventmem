@@ -239,7 +239,7 @@ EN: dict[str, str] = {
     "恢复调度默认值": "Reset schedule defaults",
     "仅清除调度字段的覆盖？": "Clear only schedule overrides?",
     "历史关系重校准": "Historical relationship recalibration",
-    "历史概率格式有歧义，模型来源未知。StartLux 输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。": "Legacy probability formats are ambiguous and model provenance is unknown. StartLux reports conditional probabilities, but other backends cannot be assumed to do so. Conditional-shaped records are skipped by default; opt in only if confirmed. This choice affects only conditional-shaped records.",
+    "历史概率格式有歧义，模型来源未知。部分后端输出条件概率，但不能假设其他后端相同。默认跳过条件形式；仅在确认后勾选，选择只影响条件形式的记录。": "Legacy probability formats are ambiguous and the model provenance is unknown. Some backends report conditional probabilities, but others cannot be assumed to do so. Conditional-shaped records are skipped by default; opt in only if confirmed. This choice affects only conditional-shaped records.",
     "将条件形式的历史概率按条件概率处理": "Treat conditional-shaped historical probabilities as conditional",
     "历史候选补算": "Historical candidate backfill",
     "只重判已有概率的关系；无法使用的记录会跳过。预览不会修改历史。": "Re-evaluate stored probabilities only; unavailable records are skipped. Preview does not change history.",

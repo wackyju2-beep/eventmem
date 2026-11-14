@@ -487,18 +487,18 @@ def test_backends_listing_shows_process_state():
     root = Path(tempfile.mkdtemp(prefix="eventmem-daemon-packs-"))
     db = fresh_db()
     try:
-        make_pack(root, "startlux", "protocol: systemone\nweights: model.gguf\nport: 0\n")
+        make_pack(root, "local-judge", "protocol: systemone\nweights: model.gguf\nport: 0\n")
         make_pack(root, "lmstudio",
                   "protocol: systemone\nmodel: lev\nbase_url: http://127.0.0.1:1234\n"
                   "external: true\n")
-        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("startlux",)))
+        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("local-judge",)))
         with running_server(daemon) as api:
             status, body = api.request("/api/backends")
         check_eq(status, 200, "ok")
         by_name = {entry["name"]: entry for entry in body["backends"]}
-        check_eq(sorted(by_name), ["lmstudio", "startlux"], "both packs listed")
-        check_eq(by_name["startlux"]["running"], False, "nothing started yet")
-        check_eq(by_name["startlux"]["in_chain"], True, "listed in decision.backends")
+        check_eq(sorted(by_name), ["lmstudio", "local-judge"], "both packs listed")
+        check_eq(by_name["local-judge"]["running"], False, "nothing started yet")
+        check_eq(by_name["local-judge"]["in_chain"], True, "listed in decision.backends")
         check_eq(by_name["lmstudio"]["in_chain"], False, "not in the chain")
         check_eq(by_name["lmstudio"]["running"], None, "external is not ours to run")
     finally:
@@ -513,10 +513,10 @@ def test_probe_says_not_running_instead_of_failing():
     root = Path(tempfile.mkdtemp(prefix="eventmem-probe-"))
     db = fresh_db()
     try:
-        make_pack(root, "startlux", "protocol: systemone\nweights: model.gguf\n")
-        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("startlux",)))
+        make_pack(root, "local-judge", "protocol: systemone\nweights: model.gguf\n")
+        daemon = daemon_mod.Daemon(settings_for(db, packs_dir=str(root), backends=("local-judge",)))
         with running_server(daemon) as api:
-            status, body = api.request("/api/backends/startlux/probe", method="POST")
+            status, body = api.request("/api/backends/local-judge/probe", method="POST")
             check_eq(status, 200, "probe is not an error")
             check_eq(body["ok"], False, "not up")
             check_eq(body["reason"], "not-running", "and it says why")
@@ -597,7 +597,7 @@ def _probe_port(port: int) -> bool:
 def test_runtime_auto_without_a_binary_explains_what_to_do():
     root = Path(tempfile.mkdtemp(prefix="eventmem-auto-"))
     try:
-        folder = make_pack(root, "startlux", "protocol: systemone\nweights: model.gguf\n")
+        folder = make_pack(root, "local-judge", "protocol: systemone\nweights: model.gguf\n")
         (folder / "model.gguf").write_bytes(b"x")
         pack = packs.load_pack(folder)
         seen = ""

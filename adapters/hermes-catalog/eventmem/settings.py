@@ -204,13 +204,13 @@ def build(home: Optional[str | Path] = None, *, db: Optional[str] = None,
     from .eventmem_core.settings import DecisionPolicy
 
     # Deployment defaults the old worker hardcoded: the model service can be started by
-    # the worker when it is down, and the URL can be overridden per machine.  Both are
-    # overridable from config afterwards (``apply`` runs below).
+    # the worker when it is down, and the URL can be overridden per machine.  There is no
+    # default start script — every deployment keeps it somewhere else — and the pack chain
+    # never uses it.  Both are overridable from config afterwards (``apply`` runs below).
     decision = replace(
         DecisionPolicy(),
         url=os.environ.get("EVENTMEM_JEV_URL") or DecisionPolicy().url,
-        start_script=os.environ.get("EVENTMEM_START_SCRIPT")
-        or str(Path.home() / "models" / "startlux" / "start.sh"),
+        start_script=os.environ.get("EVENTMEM_START_SCRIPT", ""),
         # 一个文件夹一个后端；GUI/手写都落在这里，链的顺序由 settings 的 backends 决定。
         packs_dir=str(Path(base) / "eventmem" / "backends"),
     )

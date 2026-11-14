@@ -419,9 +419,9 @@ def test_acceptance_add_a_cloud_backend_and_make_it_default():
             check_eq(status, 200, "1. add the backend")
 
             status, body = live.post("/api/config",
-                                     {"decision": {"backends": ["typesafe", "startlux"]}})
+                                     {"decision": {"backends": ["typesafe", "local-judge"]}})
             check_eq(status, 200, f"2. make it default: {body}")
-            check_eq(body["effective"]["decision"]["backends"], ["typesafe", "startlux"],
+            check_eq(body["effective"]["decision"]["backends"], ["typesafe", "local-judge"],
                      "chain as saved")
 
         chain = decision.from_settings(build_settings(home))
