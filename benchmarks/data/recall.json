@@ -16,7 +16,7 @@
     {"kind": "变更", "text": "关系判定从本地 4B 模型换成远端 LM Studio", "project": null},
     {"kind": "教训", "text": "LM Studio 的 decision 模型类型必须是 decision，不能是 llm", "project": null},
     {"kind": "决定", "text": "DSH 插件默认只连本机 daemon", "project": null},
-    {"kind": "变更", "text": "DSH 插件默认从 tunnel true 改成 local，不再连 mint", "project": null},
+    {"kind": "变更", "text": "DSH 插件默认从 tunnel true 改成 local，不再连远程主机", "project": null},
     {"kind": "教训", "text": "插件安装不等于 daemon 安装，首次启动要显示依赖状态", "project": null}
   ],
   "queries": [
