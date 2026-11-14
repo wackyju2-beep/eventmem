@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
       '重启请求未完成，请检查服务状态。': 'Restart request did not complete. Check the service status.',
       '连接': 'Connection',
       '开始使用 eventmem': 'Set up eventmem',
-      '适配器已加载，但本地记忆服务还没有连上。先确认 daemon 在运行，或在这里填写连接方式。': 'The adapter is loaded but the memory service is not reachable. Start the daemon, or configure the connection here.',
+      '适配器已加载。下面是本机与 daemon 的依赖状态；有不可用项时，按提示修正后重试。': 'The adapter is loaded. This is the dependency state between this machine and the daemon; fix any unavailable item and retry.',
       '适配器已加载': 'Adapter loaded',
       '记忆服务': 'Memory service',
       '数据库身份': 'Database identity',
@@ -1206,7 +1206,7 @@ window.__ModuleLoader__.load({
         h(Card, { title: t('开始使用 eventmem'),
           actions: h(Btn, { kind: 'sm', onClick: onRefresh, disabled: busy !== '' }, t('重新检查')) },
         h('p', { className: 'emc-hint', style: { marginTop: 0 } },
-          t('适配器已加载，但本地记忆服务还没有连上。先确认 daemon 在运行，或在这里填写连接方式。')),
+          t('适配器已加载。下面是本机与 daemon 的依赖状态；有不可用项时，按提示修正后重试。')),
         h('div', { className: 'emc-setup-checks' }, checks.map((item) =>
           h('div', { key: item.id, className: 'emc-setup-check ' + (item.state || 'warn') },
             h('span', { className: 'dot' }),
@@ -4666,13 +4666,16 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { loadSetup() }, [loadSetup])
       useEffect(() => {
-        // A fresh plugin activation with no daemon should land on the explanation, not on
-        // an empty overview. Only do it once; later failures leave the operator's tab alone.
-        if (!startedOnSetup.current && offline) {
+        // A fresh plugin activation with no daemon (or a blocking identity/token problem)
+        // should land on the explanation, not on an empty overview. Only do it once; later
+        // failures leave the operator's tab alone.
+        const blocked = Boolean(setup && Array.isArray(setup.checks)
+          && setup.checks.some((item) => item.state === 'bad'))
+        if (!startedOnSetup.current && (offline || blocked)) {
           startedOnSetup.current = true
           setTab('setup')
         }
-      }, [offline])
+      }, [offline, setup])
 
       const testSetup = async (draft) => {
         setSetupBusy('test')

@@ -10,6 +10,7 @@
 
     The DSH bundle is installed from the app: Plugins -> Add plugin -> <repo>\adapters\dsh.
     -Uninstall stops the daemon and removes autostart; the database is kept.
+    -RequireToken generates <home>\eventmem\daemon.token and makes the daemon require it.
 #>
 [CmdletBinding()]
 param(
