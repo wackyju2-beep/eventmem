@@ -1,6 +1,6 @@
 **eventmem**  
 
-English · [**中文**](README.md "README.md")  
+[English] · **中文**(README.md "README.md")  
 
 ***记住「变化」本身.***  
 一套可由多个 AI Agent 共享的持久记忆，不仅记住项目历史，也记录事实如何变化。通过现有的 [DeepSeek Harness（DSH）和 Hermes 适配器，一个 Agent 可以记录决定和结果，另一个 Agent 可以在需要时召回，不必共享各自的会话上下文。前提是两个适配器都配置到同一份 eventmem 数据库。](adapters/dsh/README.md "adapters/dsh/README.md")  
