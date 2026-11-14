@@ -1251,7 +1251,7 @@ window.__ModuleLoader__.load({
               busy === 'save' ? t('正在保存…') : t('保存并重新加载')))),
         h(Card, { title: t('安装 daemon：') },
           h('div', { className: 'emc-setup-code' },
-            'git clone https://github.com/wackyju2-beep/eventmem.git D:\\eventmem\ncd D:\\eventmem\n.\\install.cmd'),
+            'git clone https://github.com/wackyju2-beep/eventmem.git eventmem\ncd eventmem\n.\\install.cmd   # Windows\n./install.sh    # Linux: links adapters; start the daemon separately'),
           h('p', { className: 'emc-hint' },
             t('没有 daemon 时，记忆功能会静默降级：召回不注入，回合结束不写事件。') +
             ' ' + t('可选：向量检索需要 ONNX 模型；关系连边需要一个 decision 后端。'))),
