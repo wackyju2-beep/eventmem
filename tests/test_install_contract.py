@@ -48,9 +48,16 @@ def main() -> int:
     check("adapters\\dsh" in ps1 and "Add plugin" in ps1,
           "installer tells the user the DSH plugin is a separate step")
 
-    check("mode: local" in patch, "bundle default is local mode")
-    check("mint" not in patch.lower(), "bundle default names no private SSH host")
-    check(not re.search(r"tunnel:\s*true", patch), "bundle default does not open a tunnel")
+    # Comments in the patch discuss remote mode; only the shipped config lines count.
+    shipped = [line for line in patch.splitlines() if not line.strip().startswith("#")]
+    check(any(re.fullmatch(r"\s*mode:\s*local\s*", line) for line in shipped),
+          "bundle default is local mode")
+    check(not any(re.match(r"\s*tunnelHost:", line) for line in shipped),
+          "bundle default ships no SSH host")
+    check(not any(re.match(r"\s*tunnel:\s*true", line) for line in shipped),
+          "bundle default does not open a tunnel")
+    check(any(re.fullmatch(r"\s*baseUrl:\s*http://127\.0\.0\.1:\d+\s*", line) for line in shipped),
+          "bundle default points at a loopback daemon")
 
     check(pkg.get("private") is not True, "bundle is publishable (private:true removed)")
     check("dsh" in pkg.get("engines", {}), "bundle declares engines.dsh")

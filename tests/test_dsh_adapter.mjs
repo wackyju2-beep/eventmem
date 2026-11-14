@@ -55,10 +55,16 @@ await test('mode wins over a stale tunnel flag', () => {
   assert.equal(resolveConfig({ tunnel: false }).tunnel, false)
 })
 
-await test('bundled patch is local and never names mint', () => {
-  assert.match(PATCH, /mode: local/)
-  assert.doesNotMatch(PATCH, /mint/i)
-  assert.doesNotMatch(PATCH, /tunnel:\s*true/)
+await test('bundled patch is local and opens no tunnel', () => {
+  // Comments in the patch discuss remote mode; only the shipped config lines count.
+  const shipped = PATCH.split('\n').filter((line) => !line.trim().startsWith('#'))
+  assert.ok(shipped.some((line) => /^\s*mode:\s*local\s*$/.test(line)), 'mode: local')
+  assert.ok(!shipped.some((line) => /^\s*tunnelHost:/.test(line)), 'no host is shipped')
+  assert.ok(!shipped.some((line) => /^\s*tunnel:\s*true/.test(line)), 'no tunnel is shipped')
+  assert.ok(
+    shipped.some((line) => /^\s*baseUrl:\s*http:\/\/127\.0\.0\.1:\d+\s*$/.test(line)),
+    'baseUrl is loopback',
+  )
 })
 
 // ------------------------------------------------------------------ metadata
