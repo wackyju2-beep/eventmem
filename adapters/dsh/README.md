@@ -8,7 +8,7 @@ judgement. Every memory decision stays in the daemon; this side only translates 
 events into data-plane calls.
 
 ```
-Windows (DSH)                                  Mint
+Windows (DSH)                                          daemon host
 ┌──────────────────────────┐   ssh -L 9123   ┌───────────────────────────┐
 │ dsh-eventmem             │ ──────────────▶ │ eventmem daemon :9123     │
 │  prefetch / tools /      │   127.0.0.1     │  /api/mem/* → EventMem    │
@@ -231,7 +231,7 @@ The sidebar entry **记忆后台** sits directly under 插件 and opens the daem
 console as a native DSH page: 概览 / 后端 / 模型 / 调度 / 日志 / 图谱. It is deliberately not an
 iframe — the browser calls `/api/eventmem?path=…` on the DSH origin, and `lib/console.js`
 proxies only the console's own routes to the daemon over the tunnel this adapter already
-owns, so the daemon's loopback stays on the Mint box and the page follows the host theme,
+owns, so the daemon's loopback stays on the daemon machine and the page follows the host theme,
 type scale and locale. The sidebar glyph is the host's own `database-outline` icon
 (16 px, 1 px stroke), so the row reads as part of the built-in navigation.
 
@@ -348,7 +348,7 @@ therefore re-injects full text once, which is the safe direction.
   rendered block format is the user's contract and is not decorated here.
 - **No second worker.** This adapter never starts a daemon and never calls
   `POST /api/run-once`; one database keeps exactly one nightly worker
-  (`eventmem-worker` on the Mint side).
+  (`eventmem-worker` on the daemon side).
 - **Delegated child sessions are sessions too.** Each subagent gets its own
   `dsh:<id>`, its own recall, and its own turn-end extraction.
 

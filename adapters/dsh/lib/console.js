@@ -5,7 +5,7 @@
  * native rendering of the same JSON surface, so this file is only a **proxy**: the browser
  * calls `/api/eventmem?path=…` on the dsh origin, and every request is forwarded to the
  * daemon over the same tunnel the adapter already owns. No CORS, no second token, and the
- * daemon's loopback stays on the Mint box.
+ * daemon's loopback stays on the daemon machine.
  *
  * `setup` is the one route answered here instead of forwarded: it reports the adapter and
  * daemon state, tests a candidate endpoint, and writes the connection fields through the

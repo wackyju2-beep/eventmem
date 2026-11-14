@@ -38,7 +38,8 @@ curl -s -X POST http://127.0.0.1:9123/api/mem/recall -H 'Content-Type: applicati
 - 库：`/home/wacky_ju2/.hermes/eventmem/events.db`（schema **v12**；WAL；当前 492 事件 / 1234 边 / 5 项目）。
   模型是 Qwen3-Embedding-0.6B int8，放在 `~/.hermes/eventmem/models/`，归 eventmem 自己所有。
 - daemon：`127.0.0.1:9123`。**管理面**（配置/后端/日志/跑一轮/GUI）和**数据面**（`/api/mem/*`）在同一个端口，
-  没有 token、没有 TLS，只绑回环——所以跨机必须走 SSH 隧道，不要建议谁把它绑到 `0.0.0.0`。
+  默认只绑回环；token 可选（`--token`/`--token-file`，设了之后除最小 health 探测外都要带；非回环绑定必须带 token），
+  没有 TLS——所以跨机必须走 SSH 隧道，不要建议谁把它绑到 `0.0.0.0`。
 - 读文档顺序：`docs/api.md`（数据面规格）→ `docs/architecture.md`（core/adapter 边界）→
   `adapters/hermes/eventmem/*.py`（完整参考实现）→ `HANDOFF.md`。
 

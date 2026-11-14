@@ -8,7 +8,7 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 另一台机器上的宿主通过 HTTP 读写同一份记忆。
 
 ```
-   Windows (dsh)                       小主机 (Mint)
+   Windows (dsh)                     小主机 (daemon)
    ┌────────────┐   ssh -L 9123   ┌──────────────────────────┐
    │ adapter    │────────────────▶│ eventmem daemon :9123    │
    │ (HTTP)     │  127.0.0.1       │  /api/mem/* → EventMem   │

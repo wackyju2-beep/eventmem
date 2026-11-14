@@ -106,5 +106,5 @@ Hermes 适配器在本机调用 core；DSH 适配器通过 HTTP 数据面连接 
 **为什么做它**  
 这套东西最初是给我自己的 Agent 写的，机器是一台没有显卡的小主机。切块记忆经常递来一整段话，其中一些事实早已被更新的内容取代，库里却没有告诉我哪一些。模型只能猜，猜错时就把旧参数当成当前值。我想把「变化」本身写成数据：一条可以追溯、也可以纠错的关系，而不是每次召回时重新猜。  
 **开发与许可**  
-CI 使用 Python 3.11 和 3.12 运行 `tests/test_*.py`，并在 Ubuntu/Windows 上运行 DSH 适配器的 Node 契约与宿主集成测试、Windows 安装契约测试；`python benchmarks/run.py` 是可复现的召回/关系标尺。依赖及当前命令见 [CI 配置。测试数量和模型速度随版本及环境变化。](.github/workflows/tests.yml ".github/workflows/tests.yml")  
+CI 使用 Python 3.11 和 3.12 运行 `tests/test_*.py`，并在 Ubuntu/Windows 上运行 DSH 适配器的 Node 契约与宿主集成测试、Windows 安装契约测试；`python benchmarks/run.py` 是可复现的字面召回排序标尺，外带一个词法关系基线（不是模型准确率声明，见 [benchmarks/README.md](benchmarks/README.md)）。依赖及当前命令见 [CI 配置。测试数量和模型速度随版本及环境变化。](.github/workflows/tests.yml ".github/workflows/tests.yml")  
 MIT，见 [LICENSE。第三方模型权重不随仓库分发，其许可另行规定。](LICENSE "LICENSE")  

@@ -1,7 +1,7 @@
 /**
  * eventmem / dsh — the SSH tunnel supervisor.
  *
- * Cross-machine shape: the daemon only listens on the Mint loopback, so this side needs
+ * Cross-machine shape: the daemon only listens on its own loopback, so this side needs
  * `ssh -N -L <local>:127.0.0.1:<remote> <host>`. Owning that process inside the plugin is
  * what makes the tunnel follow the Harness: it starts with the adapter's activation and
  * is terminated when the adapter is disposed (plugin disabled, uninstalled, reloaded).
