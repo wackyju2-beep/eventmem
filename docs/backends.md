@@ -122,7 +122,7 @@ the flag with a warning: they derive the id from the weights filename.
 protocol: systemone
 model: StartLux-Decision-v1.1-4B-AutoThink
 external: true
-base_url: http://10.42.0.51:1234
+base_url: http://192.168.1.50:1234
 check_model: true
 ```
 

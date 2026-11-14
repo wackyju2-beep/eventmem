@@ -53,13 +53,13 @@ const STATUS = {
 
 const PAYLOAD = {
   '/api/health': { status: 'ok', pid: 873078, schema: 9, instance_id: 'inst-1',
-                   db: '/home/wacky_ju2/.hermes/eventmem/events.db' },
+                   db: '/home/user/.hermes/eventmem/events.db' },
   '/api/i18n': { lang: 'zh', map: {} },
   '/api/config': { effective: { edges: edgesConfig, decision: { backends: ['startlux', 'win-autothink'] } },
-                   file: '/home/wacky_ju2/.hermes/eventmem/settings.yaml', overrides: { edges: {} }, writable: true },
+                   file: '/home/user/.hermes/eventmem/settings.yaml', overrides: { edges: {} }, writable: true },
   '/api/status': null,
   '/api/logs': { logs: [{ ts: T0, level: 'INFO', name: 'eventmem.daemon', message: 'eventmem daemon: ok' }] },
-  '/api/packs': { packs: [], problems: [], dir: '/home/wacky_ju2/.hermes/eventmem/backends' },
+  '/api/packs': { packs: [], problems: [], dir: '/home/user/.hermes/eventmem/backends' },
   '/api/models': { llama: { build: 'b12284', binary: '/home/x/llama-server' }, models: [] },
   '/api/job': { job: null },
   '/api/stats': null

@@ -501,7 +501,7 @@ def test_check_model_is_opt_in_and_ignored_for_self_packs():
     pack = packs.from_mapping(
         "win-autothink", "/tmp/b/win-autothink",
         {"protocol": "systemone", "model": "StartLux-Decision-v1.1-4B-AutoThink",
-         "base_url": "http://10.42.0.51:1234", "external": True, "check_model": True},
+         "base_url": "http://192.168.1.50:1234", "external": True, "check_model": True},
         warn=warned.append,
     )
     check_eq(pack.check_model, True, "external pack keeps the flag")

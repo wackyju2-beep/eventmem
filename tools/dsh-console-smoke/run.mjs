@@ -87,7 +87,7 @@ function reply(route, body) {
       return {
         effective: { edges: EDGES },
         overrides: { edges: { margin: 0.2 } },
-        file: '/home/wacky_ju2/.hermes/eventmem/settings.yaml',
+        file: '/home/user/.hermes/eventmem/settings.yaml',
         writable: true,
       }
     case 'recalibrate/preview':
