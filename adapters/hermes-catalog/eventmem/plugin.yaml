@@ -1,0 +1,14 @@
+name: eventmem
+version: "0.2.1"
+requires_hermes: ">=0.23.1"
+description: >-
+  Local event-shaped memory for Hermes, with SQLite/FTS recall and optional
+  embeddings. Turn-end extraction uses the configured Hermes auxiliary model.
+python_dependencies:
+  - "onnxruntime>=1.20,<2; sys_platform != 'android'"
+  - "tokenizers>=0.20,<1; sys_platform != 'android'"
+  - "numpy>=1.26,<3; sys_platform != 'android'"
+tags:
+  - memory
+  - local
+  - sqlite

@@ -26,6 +26,8 @@ jobs:
       # config.yaml (tests/test_packs.py, which says what to install when it is absent).
       - name: install PyYAML
         run: python3 -m pip install --disable-pip-version-check pyyaml
+      - name: check Hermes catalog copy
+        run: python3 tools/sync_hermes_core.py --check
       - name: run all test scripts
         run: |
           set -e
