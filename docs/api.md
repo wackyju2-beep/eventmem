@@ -18,7 +18,7 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 
 ## 绑定与鉴权
 
-- daemon 只绑 `127.0.0.1`，**没有 token、没有 TLS**。跨机一律走 SSH 隧道：
+- daemon 默认绑定 `127.0.0.1`，但监听地址可配置；它**没有 token、没有 TLS**。跨机访问建议走 SSH 隧道：
   `ssh -N -L 9123:127.0.0.1:9123 mint`，远端把 `http://127.0.0.1:9123` 当本地用。
 - 不要为了"方便"把 daemon 绑到 `0.0.0.0`：管理面（`/api/config`、`/api/install`、`/api/logs`）
   和数据面在同一个端口上，等于把整台机器的事件库和配置一起开放出去。真要对外，自己加反向代理 + 鉴权。
@@ -52,7 +52,7 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 
 ### `POST /api/mem/events/<id>/forget` — 忘记一条
 
-`{"id": 485, "removed": true}`。墓碑规则与本地写入一致（见 README「记忆的单位是变化」）。
+`{"id": 485, "removed": true}`。删除和墓碑规则与本地写入一致。
 
 ### `POST /api/mem/neighbors` — 看一条事件周围
 
@@ -168,8 +168,7 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 
 ## 它**不**做什么
 
-- 不跑夜间连边。一个库只能有一个 worker（`<db>.daemon.lock` 是 flock），远端宿主不要起自己的 daemon，
-  也不要碰 `POST /api/run-once`。
+- 远端 adapter 不负责启动后台连边。每个数据库只运行一个 daemon/worker；Windows 缺少 `fcntl` 时单实例锁不生效，不能依赖它阻止重复启动。
 - 不做校验以外的任何加工：脱敏、长度限制、批量上限、会话项目黏性都在 adapter。
 - 不给你 SQL。要 SQL 就说明这件事应该进 core（提 PR），而不是让每个 adapter 各写一套查询。
 

@@ -1,223 +1,78 @@
 # eventmem
 
-[![tests](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/hermes-eventmem/actions/workflows/tests.yml)
+[![tests](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · **中文**
 
-**记住「变化」本身的记忆层。** 大多数 agent 记忆层记住的是「说过什么」：把对话切块、向量化、取 top-k。
-eventmem 记住的是哪条事实取代了哪条、哪天、多大把握。
+**记住「变化」本身的记忆层。**
 
-一个 SQLite 文件，不需要 API key，不需要 GPU：事件只追加，五种有向关系，判定模型跑在 CPU 上。
+一套可由多个 AI Agent 共享的持久记忆，不仅记住项目历史，也记录事实如何变化。通过现有的 [DeepSeek Harness](adapters/dsh/README.md)（DSH）和 Hermes 适配器，一个 Agent 可以记录决定和结果，另一个 Agent 可以在需要时召回，不必共享各自的会话上下文。前提是两个适配器都配置到同一份 eventmem 数据库。
 
-<sub>v0.3.0 · schema v8 · 343 项检查</sub>
+- **跨 Agent 交接**：DSH 记录的工作，Hermes 可以检索；反过来也一样。
+- **追踪事实变化**：保留旧事件，并记录新事件对旧事实的改变或否定。
+- **可检查、可纠错**：在图谱里查看事件和关系，检查判定并手动修正。
 
-这套东西是给我自己的 agent 写的，机器是一台没有显卡的小主机。起因很具体：切块记忆每次递过来一整段话，
-里面总有一半句子已经被更新的东西替代了，而库里没有任何字段告诉我哪一半。模型只能猜；猜错就把三个月前的
-旧参数当成现在的。所以我把「取代」这件事本身写成数据：一条有方向、有类型、有概率、有日期的边。
+## 为什么用 eventmem？
 
-![记忆图谱](docs/img/graph-default.png)
-*截图时我的库：85 条事件、357 条边。方框是事件，曲线是修正关系，灰色虚线是判过但没连上的对。*
+**事实变了。** 不必只留下两段相互竞争的文本，让 Agent 自己判断哪个更新：eventmem 可以把新旧事件连起来。
 
-## 四句话
-
-1. **记忆即变化**——修正在写入时存下来，不在召回时重新推断。
-2. **关系是显式的**——五种有向边，能查、能审、能改。
-3. **判在 CPU 上**——4B 判别模型，一对 6.7 秒，这条路径不调生成式 API。
-4. **core + adapter**——引擎不知道 Hermes 存在。
-
-下面每一条都给依据。
-
-## 一、记忆的单位是变化
-
-一条事件 = 时间戳 + 类型 + 一句话。类型只有五种：`决定 / 尝试 / 结果 / 变更 / 教训`。
-事件只追加：历史不改，改的方式是再写一条修正。
-
-```
-[11-05] 决定  小主机用 256G SSD 做系统盘
-[11-06] 变更  小主机换 2T NVMe 做系统盘      -> 改变上面那条
+```text
+[11-05] 决定  小主机用 256 GB SSD 做系统盘
+[11-06] 变更  小主机换成 2 TB NVMe 系统盘 → 改变上面的决定
 ```
 
-召回命中旧事件时，会顺着边找到新的那条，把旧的渲染成 `[已失效·被11-06取代]`。
-模型不需要自己发现 256G 这个数过时了，它被告知了。
+当召回命中旧事件、且关系已经存在时，系统可以标记旧事实已被取代，并带出新事件。关系也可能漏判或误判，见[局限与取舍](#局限与取舍)。
 
-| | 切块记忆 | eventmem |
-|---|---|---|
-| 存什么 | 文本 + 向量 | 带时间的事件 + 修正关系 |
-| 事实变了 | 旧块还在，新块再加一块 | 一条「变更」事件指向旧的那条 |
-| 召回给什么 | top-k 段落，其中一部分已经过时 | 现在的状态 + 它是怎么变成这样的 |
-| 「为什么变」 | 无处可查 | 在边上（因为 / 细化） |
+**工作换了 Agent。** 比如 DSH 将一次部署结果记入共享项目，稍后 Hermes 会话查询这个项目时就可以召回它。共享的是*记忆*，不是对话上下文；能否召回取决于实际写入的内容与查询，不保证每次都找到所有相关事件。
 
-最后一行才是重点：**失效是在事实变化时确定的，不是在读取时猜的。**
+上面是功能示意，并非已录制的端到端演示。下图是**历史**图谱截图，不代表当前的连边密度。
 
-命令、配置、日志、代码放进 artifact，按内容哈希只存一份，事件里留引用，所以事件正文永远是一行。
+![历史记忆图谱](docs/img/graph-default.png)
 
-## 二、关系是写下来的边，不是召回时猜的
+## 快速开始
 
-五种关系，方向永远是旧 → 新：
+### 需要安装什么？
 
-| 关系 | 含义 |
+| 能力 | 依赖 |
 |---|---|
-| **改变** | 后一条替换了前一条的参数、对象、配置或条件 |
-| **否定** | 后一条推翻或废止前一条，且没有给出同类平替 |
-| **重复** | 语义等价，换了个说法，没有实质性新增 |
-| **因为** | 后一条解释了前一条为什么发生 / 为什么这样选 |
-| **细化** | 后一条补执行细节：步骤、局部参数 |
+| 事件存储和字面检索 | Python 3.11+、带 FTS5 及其 trigram tokenizer 的 SQLite 和适配器；不需要关系判定模型 |
+| 语义检索 | 可选的向量依赖和 embedding 模型 |
+| 自动判定关系 | 运行 daemon 并配置决策后端；可以使用本地 CPU 后端 |
+| 共享记忆和图谱 | 各适配器指向同一数据库，加上 daemon/控制台；跨机器通过 SSH 访问 HTTP API |
 
-`改变` 和 `否定` 的边界是「有没有给出同类平替参数」，不是「听起来像不像否定」。
-这是设计时定下的判据，不是模型随机分的。
+适配器会调用宿主的辅助模型进行回合末抽取，宿主模型可以是本地或远端。远端决策后端也可能需要凭据。基础存储和字面检索不需要 GPU 或判边模型。
 
-这些边是数据，不是推断。一条关系只判一次，连同方向、类型、时间和模型的原始分布一起写进 SQLite，
-之后读取是免费的。召回不会为了判断两句话是否矛盾再去调一次模型。
-
-存下来的是判定，不只是一个结论：
-
-- `edges.probs` 保留每条边背后的完整分布（第一问 4 个选项，第二问 3 个）。
-- `pair_evals` 连**判过但没连边**的对也留着，所以图谱能把它们画成灰色虚线。
-- 只有第一名是真实标签、且比第二名高出 `margin = 0.15` 才写边。以后想调阈值，是对着库里的分布
-  算一条 SQL，不用再跑一晚推理。
-
-候选集是常数级的。新事件只和**活跃链头**比：还没被改变、否定、重复过的事件。候选来自四路：
-向量 top-10、同会话最近的链头、共享同一个 artifact 或同一个文件路径的、以及两端都是变更/决定时的
-跨项目对。我的语料里，42 条事件产生 113 对；旧的「同项目七天全组合」规则同规模约 861 对，
-而且库越大差得越多。
-
-这些都能当场翻开。`mem_neighbors 62` 会告诉你 #62 取代了谁、谁改了它、同会话前后还有哪些。
-桌面版把整库画成 3D 图，检查器里能看每条线背后的概率分布；判错的关系可以直接改，改过的描一圈彩虹边。
-
-![点开一条边](docs/img/graph-edge.png)
-*点开一条边：细化 0.706，下面另一问的分布也在，旁边可以直接改判。*
-
-## 三、判关系的是 CPU 上的小模型
-
-判关系用的是一个小型决策模型，当分类器用。一对事件一次前向，同时回答两个独立的问题：
-后一条对前一条做了什么（重复 / 改变 / 否定 / 都不是），以及它是否解释了原因（因为 / 细化 / 都不是）。
-读的是 softmax 分布，不生成任何文字。
-
-数字是在开发它的那台机器上测的——6 核小主机，没有显卡：
-
-- llama.cpp 加载 StartLux 4B Instant，Q8_0，4.48 GB
-- **6 线程 6.7 秒一对**；2 线程 16–18 秒
-- prefill ≈ 82 tok/s；耗时与 prompt token 数线性，没有隐藏的固定开销
-
-两个问题一次前向是故意的。单一 6 选 1 实测 2.85 秒，但只产出一个标签，softmax 会把真实存在的关系
-压掉（否定 0.579 → 0.216）。两问版每对更贵，但能给出两条边。
-
-「不调 API」要说准确：指的是**关系判定**这条路。回合末抽取仍然用宿主的 auxiliary 模型
-（Hermes 里是 `call_llm`），那个可以是本地也可以是远端。库不会离开这台机器；core 唯一会发起的
-HTTP 请求是连你自己的判定服务（`EVENTMEM_JEV_URL`，缺省 `http://127.0.0.1:18090`）。
-
-所有部件都可选：
-
-- 没有判定模型 → 事件和召回照常，只是没有边。
-- 没有 onnxruntime → 向量臂静默消失，召回退化成纯 FTS5。
-- 整库一个 SQLite 文件；只有一个后台进程，有事件时才醒。
-
-也得说清楚短板：Instant 版在成对判别上弱于思考版（DecisionPivot 41.5 对 59.9），
-所以 margin 和提示词定义比换模型更值得花时间。
-
-## 四、core 不认识宿主，adapter 只做翻译
-
-边界的判据只有一个问题：**换一个宿主，这段代码还成立吗？** 成立就在 core。
-
-```
-core/eventmem_core/          schema · store · recall · embed · 连边 · packs · decision
-                             runtime · daemon · install · worker · ui · i18n
-adapters/hermes/             所有知道 Hermes 存在的东西
-  eventmem/                  记忆 provider：工具面、中间件、回合末抽取、配置
-  eventmem-graph/            图谱后端（dashboard 插件）
-  desktop-plugins/           图谱前端：一个 plugin.js，宿主注入 React
-```
-
-core 里没有 `import agent.*`（有测试盯着），不知道 `~/.hermes`、工具名、中间件和 `config.yaml`。
-adapter 只做翻译：一次工具调用翻成一个 `EventMem` 方法，一份宿主配置翻成 `CoreSettings`，
-一次宿主模型调用翻成一次抽取请求。它不写 SQL，也不做召回融合。
-
-```python
-from eventmem_core import EventMem, CoreSettings, apply
-
-settings = apply(CoreSettings(db_path="/path/events.db"), {"edges": {"margin": 0.2}})
-mem = EventMem(settings)
-mem.add_event("结果", "……", project="小主机", session="s1")
-mem.recall("上次那个盘怎么选的？", state=mem.new_recall_state())
-```
-
-Hermes 是第一个 adapter，DeepSeek Harness 是下一站。换宿主时不该重写的东西，恰好就是 core 里的那些：
-margin、活跃链头、RRF、骨架、渲染预算。
-
-两个宿主共用一个库也分得清谁写的：`EventMem(settings, agent="hermes")` 把这个实例的标签写进
-`events.agent`，adapter 再把自己的会话 id 加上宿主前缀（`hermes:20261111_…`）。没有 `agent` 的行就是
-早于这一列的老事件——不猜、不回填。
-
-默认部署形态是**一台机器**：一个 `events.db`、一个 daemon、任意多个宿主进程通过 WAL 读写。
-同机的两个 agent 可以共用这个文件，只要**每个库只有一个 daemon**（第二个会直接拒绝启动：
-`<db>.daemon.lock` 是 `flock`）。跨机器的宿主改用 daemon 的**数据面**（同一个 loopback 端口，
-走 SSH 隧道）：`POST /api/mem/events`、`POST /api/mem/recall`、`GET /api/mem/projects`、
-`GET /api/mem/events/<id>`……它是 `EventMem` 的薄镜像——只做校验和渲染，批量、批内链接、脱敏都归 adapter。
-库文件永远不出这台机器；接口没有鉴权，所以只绑回环，这是设计而不是疏漏。规格见 [`docs/api.md`](docs/api.md)。
-
-图谱后端是「adapter 一律走 `EventMem`」的唯一例外：它直接读同一张 SQLite 库。它要的是整张事件表
-（provider 的召回查询全是 top-k），而它的人工编辑就是两条 UPDATE。这样 FastAPI 不进记忆插件，
-图谱那边也永远不注册 provider。
-
-## 一个回合实际怎么跑
-
-**写**：工具中间件在每个「改变了状态」的工具结果末尾追加一行提醒，让模型在同一个回合里把事件写掉，
-而不是等到对话末尾，那时候「为什么」已经凉了。整回合一条都没写，`sync_turn` 会在回合结束后再调一次
-auxiliary 模型，从这轮问答里抽 0–3 条；寒暄在调模型之前就被挡住。
-
-**读**：骨架段每会话每项目给一次（最早的决定、最新的决定、最新的结果、最新的变更、最新的教训）。
-命中段做向量 + FTS5 的 RRF，沿修正边展开一跳，加上同会话邻居。本会话已经给过的条目只留一行指针。
-
-**边**：常驻 worker 每 60 秒看一次游标。有新事件就挑候选、一对两问、按 margin 写边，
-成功才推进游标。
-
-## 安装
-
-### 一台电脑（Windows + DSH）
+### Windows + DSH
 
 ```powershell
-git clone https://github.com/wackyju2-beep/eventmem D:\eventmem
+git clone https://github.com/wackyju2-beep/eventmem.git D:\eventmem
 cd D:\eventmem
 .\install.cmd
 ```
 
-`install.ps1` 做四件事：建 venv 并装 `core`（默认带向量臂）、生成 `daemon.cmd` 并启动
-`127.0.0.1:9123`、注册登录自启、跑一次自检并把结果打出来。数据全在
-`<HERMES_HOME 或 %USERPROFILE%\.hermes>\eventmem\`（库、模型、后端、日志都在这）。
+安装器会创建虚拟环境，安装 core 和可选的向量运行时，启动本地 daemon 并设置登录自启。如果缺少 Python，它可能通过 winget 安装 Python 3.12。给 `install.cmd` 加上 `-NoPythonInstall`、`-NoVector` 或 `-NoAutostart`，可分别跳过这些操作。数据默认保存在 `%USERPROFILE%\.hermes\eventmem`（设置了 `%HERMES_HOME%` 时则在其下）。
 
-没装 Python 会先试着用 winget 装 3.12；不想让它动系统就加 `-NoPythonInstall`。其它开关：
-`-Port 9123`、`-NoVector`（省掉 onnxruntime）、`-NoAutostart`、`-Uninstall`（停服务并移除自启，库保留）。
+在 DSH 中打开**插件 → 添加插件**，选择 `D:\eventmem\adapters\dsh`。适配器可以连接 `http://127.0.0.1:9123` 上的本地 daemon；远程 SSH 和配置见 [DSH 指南](adapters/dsh/README.md)。需要自动判边时，在记忆后台配置后端或下载模型；需要语义检索时，还要把 Qwen3-Embedding-0.6B ONNX 的 `tokenizer.json` 和 `model_int8.onnx` 放进 `<HERMES_HOME>\eventmem\models\`（默认 `%USERPROFILE%\.hermes\eventmem\models\`），仅安装向量运行时不够。
 
-装完在 DSH 里 **插件 → 添加插件**，选本仓库的 `adapters\dsh`。单机不用改隧道配置：
-daemon 在 9123 上应答时插件直接用它，不会去 ssh。要关系边再进控制台
-`http://127.0.0.1:9123/` 的 **后端** 建 pack（或 **模型** 页下 GGUF，约 2.4 GB）。
-
-随时可以自检：
+在仓库目录下可随时自检：
 
 ```powershell
 ~\.hermes\eventmem\venv\Scripts\python.exe tools\selfcheck.py
 ```
 
-编码器（语义召回）是可选的：把 Qwen3-Embedding-0.6B 的 ONNX（`tokenizer.json` +
-`model_int8.onnx`）放进 `...\eventmem\models\`。缺了召回只用 FTS5，自检会直接说明。
+如果设置了 `HERMES_HOME`，请相应调整路径。
 
-### Hermes（Linux / systemd）
+### Linux + Hermes
+
+安装 Hermes 后，克隆仓库并链接适配器：
 
 ```bash
-git clone https://github.com/wackyju2-beep/hermes-eventmem ~/eventmem
-cd ~/eventmem && ./install.sh
+git clone https://github.com/wackyju2-beep/eventmem.git ~/eventmem
+cd ~/eventmem && bash ./install.sh
 ```
 
-`install.sh` 把三份 Hermes 侧目录软链进 `~/.hermes`：
-
-```
-adapters/hermes/eventmem                          -> ~/.hermes/plugins/eventmem
-adapters/hermes/eventmem-graph                    -> ~/.hermes/plugins/eventmem-graph          （可选）
-adapters/hermes/desktop-plugins/eventmem-graph   -> ~/.hermes/desktop-plugins/eventmem-graph （可选）
-```
-
-然后启用：
+在 Hermes 的 `~/.hermes/config.yaml` 中选择 provider：
 
 ```yaml
 memory:
@@ -225,140 +80,62 @@ memory:
 plugins:
   entries:
     eventmem:
-      settings: {}               # 可选；不写就是全部默认值
+      settings: {}
 ```
+
+重启提供会话的 Hermes 进程，并开始新会话。`install.sh` 只建立软链接，不会启动 daemon。若使用默认数据库，可以用安装 Hermes 的 Python 环境在前台启动：
 
 ```bash
-hermes plugins enable eventmem-graph   # 要图谱才需要
+~/.hermes/hermes-agent/.venv/bin/python ~/eventmem/adapters/hermes/run.py daemon --db "$HOME/.hermes/eventmem/events.db"
 ```
 
-重启会话后生效。数据库建在 `~/.hermes/eventmem/events.db`，第一次写入时自动建表（schema v8）。
-所有阈值都在 `plugins.entries.eventmem.settings` 下，默认值和含义见
-[`docs/settings.md`](docs/settings.md)。
+请按实际安装位置和 `HERMES_HOME` 调整 Python 与数据库路径；在另一个终端运行 `curl http://127.0.0.1:9123/api/health` 检查服务。需要 Hermes 图谱/控制台时，在 `plugins.enabled` 中启用 `eventmem-graph` 和 `eventmem-gui` **两个**插件；`install.sh` 会打印更多步骤。需要退出登录后继续运行时，请使用服务管理器启动 daemon。可选的判定模型和 embedding 配置见[后端](docs/backends.md)和[设置](docs/settings.md)。
 
-### 判关系的模型是一个文件夹（v0.3）
+要与另一台机器上的 DSH 共享，请在 Hermes 所在机器启动使用 **Hermes 同一数据库**的 daemon，并在 DSH 插件设置中将 `tunnelHost` 设为指向该机器、可免交互登录的 SSH 别名。如果 Windows 安装器已经在 9123 启动本地 daemon，DSH 默认会直接连接它，而不会建立隧道。此时可以用 `install.cmd -Uninstall` 停止本地 daemon 并移除自启（本地数据库会保留）；也可以选择未占用的本地端口，同时设置 `baseUrl`（如 `http://127.0.0.1:9124`）和 `tunnelLocalPort`（`9124`），`tunnelRemotePort` 保持为远端 daemon 的端口。隧道设置详见 [DSH 指南](adapters/dsh/README.md)。不要把 SQLite/WAL 放到网络共享目录。
 
-用哪个模型判关系，不再是插件里的一个设置项，而是一个目录：
+**试一次交接：**让 DSH 把一条容易辨认的结果记入某个项目，再让新的 Hermes 会话召回它，并用 `expand` 查看返回事件的来源和项目；反过来也可以试。这里是建议的验证步骤，不代表已经在你的环境中录制或实测；召回效果取决于实际写入和查询。
 
-```
-~/.hermes/eventmem/backends/lev/config.yaml
-```
+## 工作流程
 
-三种形态，由文件里写了哪些键决定：`weights:`（eventmem 自己拉起 `llama-server`）、
-`base_url:` + `external: true`（别人在跑：LM Studio、systemd、start.sh）、只写 `base_url:`
-（云端）。**把文件夹放进去就是安装**。完整键表、回退规则、排错表见
-[`docs/backends.md`](docs/backends.md)，能直接拷的样例在 [`examples/backends/`](examples/backends/)。
+1. **记录**：Agent 写入事件，或由适配器在回合末调用宿主辅助模型抽取事件。命令、日志等较长内容可以存为 artifact。
+2. **建立关系**：可选的后台 worker 选择候选事件对，交给配置好的决策后端判定，再保存被接受的关系。
+3. **召回**：字面检索以及配置后的语义检索找出相关事件，结果可以包含已保存的修正关系和邻近上下文。
 
-自托管路径一条命令——按本机硬件选 `llama.cpp` 包、下 GGUF、校验 sha256、写好 pack：
+事件分为**决定、尝试、结果、变更、教训**；关系分为**改变、否定、重复、因为、细化**。项目用于组织记忆；Agent 可通过 `mem_recall`、`mem_neighbors` 和 `expand` 搜索事件、查看变化历史和读取 artifact。图谱也允许人工修正事件及关系。
 
-```bash
-PY=~/.hermes/hermes-agent/.venv/bin/python
-$PY ~/eventmem/adapters/hermes/run.py models install lev
-```
+## 架构
 
-然后配链路，写在 `~/.hermes/eventmem/settings.yaml`（GUI 和手写读写同一份）：
-
-```yaml
-decision:
-  backends: [typesafe, lev]      # 谁先活着，谁负责整轮
+```text
+ Hermes adapter ──────┐
+                      ├── eventmem Core ── 共享 SQLite 记忆
+ DSH adapter ─ daemon ┘    存储 · 召回       事件 · 项目 · 关系
+                           关系判定
 ```
 
-没配 key 的 `typesafe` 不算错：探活返回 `needs_key`，链路自动走到 `lev`，每条边都记着是哪个后端
-判的（`edges.backend`）。链路为空 = 只用 `decision.url` 那个单端点，也就是 v0.2 的行为。
+Hermes 适配器在本机调用 core；DSH 适配器通过 HTTP 数据面连接 daemon。适配器负责对接宿主和调用宿主模型进行抽取，core 本身不是通用的事件抽取模型。新写入的数据带有 Agent/会话标记。其他宿主需要单独开发适配器或 API 集成，并非自动支持。
 
-`run.py daemon` 是这一切背后的常驻进程：轮询、只在有活时拉起自托管 pack，并在
-**http://127.0.0.1:9123/** 提供一个 GUI（概览 / 后端 / 模型 / 调度 / 日志），它只是同一套 JSON
-路由的薄客户端。
+**每个数据库只运行一个 daemon。** API 和管理台没有内置鉴权，默认只监听本机回环地址；不要暴露到不可信网络。daemon 也允许更改监听地址，请保持其私有。详见[架构](docs/architecture.md)与[数据面 API](docs/api.md)。
 
-这个地址只在跑 daemon 的那台机器上存在——桌面端连的是**远端** backend 时就正好用不了。所以
-adapter 里还带了一个 `eventmem-gui` dashboard 插件，把整个管理台原样挂到 dashboard 自己的源下
-（`/api/plugins/eventmem-gui/`，走 dashboard 的登录鉴权）。在 app 里它是状态栏那颗 **记忆后台**
-按钮；在浏览器里就是 dashboard 主机上的同一个路径，不用记隧道。daemon 在别的机器上时，用
-`EVENTMEM_DAEMON_URL` 把代理指过去。
+## 文档
 
-向量臂（可选）：`pip install onnxruntime tokenizers numpy`，再把 Qwen3-Embedding-0.6B 的 ONNX
-（512 维 int8：`tokenizer.json` + `model_int8.onnx`）放进 `<hermes_home>/eventmem/models/`——
-模型归 eventmem 自己所有，不要塞进别的插件目录。缺任何一个都只是静默降级到纯 FTS，
-所以要主动查 `Encoder(...).available()` 或日志里的 `encoder ready`，别把安静当成没事。
+- [架构与数据流](docs/architecture.md) · [关系与连边](docs/relations.md)
+- [决策后端与模型安装](docs/backends.md) · [设置](docs/settings.md) · [API](docs/api.md)
+- [DSH 适配器、控制台和 SSH](adapters/dsh/README.md) · [后端配置示例](examples/backends/)
 
-## 用起来
+## 局限与取舍
 
-模型自己调这些工具，人一般不用管。
+- eventmem 主要面向动态事实、项目历史和明确的事件关系；如果只是检索大量静态文档，普通 RAG 可能更简单。
+- 自动关系判定并不保证正确。策略倾向于漏掉不确定的边，也不把缺乏证据的关系永久写入；**连边更少并不等于准确率更高**，仍需要人工标注评估误连和漏连。没有边的事件仍可通过普通检索找到，但检索未必能识别它们的关系。
+- 其他记忆系统里的旧文本不会自动迁移；Agent 也可能选错一个已存在的项目。重要内容应检查并修正。
+- DSH 的 `evt_add` 会校验传入的 links，但目前不会写入这些边；后台连边单独进行，也不保证重建相同关系。详见[适配器指南](adapters/dsh/README.md)。
+- 这是个人项目，不提供托管服务；schema 和接口可能变化。图谱标签及存储的事件/关系名为中文。
 
-| 工具 | 作用 |
-|---|---|
-| `evt_add` | 写 1–n 条事件 |
-| `mem_recall` | 语义 + 字面混合检索 |
-| `mem_neighbors` | #N 取代了谁 / 谁改了它 / 同会话邻居 |
-| `expand` | 取某条事件背后的 artifact 原文 |
-| `proj_add` / `proj_list` | 项目（人工命名，封闭词表） |
-| `evt_forget` | 删除一条事件 |
+## 为什么做它
 
-模型每回合还会收到一行现有项目，按与本回合的相关度排序，所以它在选项目或新建项目之前先知道有什么。
+这套东西最初是给我自己的 Agent 写的，机器是一台没有显卡的小主机。切块记忆经常递来一整段话，其中一些事实早已被更新的内容取代，库里却没有告诉我哪一些。模型只能猜，猜错时就把旧参数当成当前值。我想把「变化」本身写成数据：一条可以追溯、也可以纠错的关系，而不是每次召回时重新猜。
 
-图谱在桌面版：**记忆后台 → 图谱**页（`eventmem-graph` 插件本身不再有按钮和页面，它只把三维视图交给控制台）。
+## 开发与许可
 
-| 操作 | 效果 |
-|---|---|
-| 左键空白拖动 | 平移相机 |
-| 中键拖动 | 转视角 |
-| 右键按住再拖 | 框选：选中所见范围内、投影中心落在框里的原子 |
-| 滚轮 | 沿视线前后移动（退得很远时小球收成彩色圆点，不带编号） |
-| 点方框 | 相机飞过去，方框拉到眼前；右侧改类型、正文和项目 |
-| 点边 | 两端拉到画面左右；右侧看分布、改关系、删边 |
-| 左键拖方框 | 摆到任意位置，刷新还在 |
-| 框选之后 | 批量面板：一次改项目和/或类型；已有的边一条不删，候选重新选，判过的对不会再问 |
-| 点空白 | 只退出焦点，不回弹 |
-| 筛选 | 项目 / 会话 / 日期 / 类型 / 边的关系 / 序号 / 语义检索，全部按 AND 叠加；可只看命中，或带上一跳邻居 |
+CI 使用 Python 3.11 和 3.12 运行 `tests/test_*.py` 下的脚本；依赖及当前命令见 [CI 配置](.github/workflows/tests.yml)。测试数量和模型速度随版本及环境变化。
 
-语义检索用召回同一个编码器给输入编码，取相似度最高的 N 条，再与其余条件取交集。它依赖 `events.vec`
-有向量、ONNX 运行时可用；两者缺一时图谱会明说，而不是安静地返回空。
-
-![点开一个原子](docs/img/graph-atom.png)
-*点开一个原子：正文、类型、项目，以及和它相连的 9 条边。*
-
-## 测试
-
-纯脚本，不需要 pytest：
-
-```bash
-cd ~/eventmem
-for t in store recall nightly worker i18n plugin settings hermes_settings \
-         packs decision daemon install ui gui_proxy; do
-  python3 tests/test_$t.py | tail -1
-done
-```
-
-```
-store            PASS 32      packs            PASS 27
-recall           PASS 33      decision         PASS 21
-nightly          PASS 93      daemon           PASS 16
-worker           PASS 3       install          PASS 19
-i18n             PASS 10      ui               PASS 15
-plugin           PASS 43      gui_proxy        PASS 7
-settings         PASS 14      ──────────────────────────
-hermes_settings  PASS 10      343
-```
-
-343 项检查，每个用例一个自己的临时库，不碰 `~/.hermes`。召回测试用 `FakeEncoder`，
-没有 numpy / onnxruntime 也能全绿。`test_plugin.py` 需要宿主的 `agent.memory_provider`，
-裸机器（CI）上由 `tests/_host_stub.py` 换成一个最小桩，所以 3.11 和 3.12 的 Actions 也是全绿。
-
-v0.3 这几个套件故意做成端到端：`test_daemon` 真起子进程，`test_install` 用本地 HTTP 服务冒充
-发布页和模型仓（含 `Range` 续传），`test_ui` 走真 HTTP 调 daemon——GUI 没有别的客户端，路由就是契约。
-
-## 已知限制
-
-- 不迁移旧数据。别的记忆库里的历史块不会变成事件，只能从启用之后开始积累。
-- 项目由模型选。工具会拒绝不存在的名字，但选错一个真实存在的项目它发现不了，只能人眼在图谱里改。
-- 关系的质量就是判定模型的质量。4B Instant 在成对判别上弱于思考版（41.5 对 59.9），
-  阈值和提示词比换模型更值得花时间。
-- 阈值（向量 0.35、margin 0.15、预算 600/850）是在小语料上定的，攒到几千条事件后应该重标。
-- 图谱界面和库里存的类型/关系名是中文；模型读到的文本是中英双语。
-- 这是个人项目，不是产品：没有托管服务、没有技术支持，也不承诺 schema 跨版本不变。
-- daemon 和它的 GUI 是**一个库一个进程、只绑 loopback、没有鉴权**。它是本机管理面板，
-  不要放到一个你不信任的网络上。
-
-## 许可
-
-MIT，见 [`LICENSE`](LICENSE)。第三方权重不随仓库分发；我实测用的 decision 模型是 CC BY-NC 4.0。
+MIT，见 [LICENSE](LICENSE)。第三方模型权重不随仓库分发，其许可另行规定。

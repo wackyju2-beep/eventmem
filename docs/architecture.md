@@ -1,38 +1,41 @@
 # 架构：core / adapter
 
-一句话：**core 负责记忆逻辑，adapter 负责让某个宿主以为这是它自己的记忆。**
+**Core 负责共享的记忆逻辑；adapter 负责对接各宿主的会话、工具和模型。** Hermes 与 DSH 已有适配器，其他宿主需要自行实现集成。
 
-```
-                 ┌─────────────────────────────┐
-   Hermes ──────▶│ adapters/hermes/eventmem    │
-                 │  provider · tools ·         │
-                 │  middleware · extract ·     │
-                 │  settings · cli             │
-                 └──────────────┬──────────────┘
-                                │  EventMem / CoreSettings
-                 ┌──────────────▼──────────────┐
-   DeepSeek ────▶│ core/eventmem_core          │
-   Harness        │  core.py   EventMem 门面    │
-   (下一站)        │  store / recall / embed     │
-                 │  nightly / worker / jev     │
-                 └─────────────────────────────┘
+```text
+Hermes ── Hermes adapter ──────────────────┐
+                                           ├── eventmem Core ── SQLite events.db
+DSH ── DSH adapter ── HTTP ── daemon ──────┘
 ```
 
-## 边界怎么划的
+Hermes 适配器在数据库所在机器调用 core；DSH 适配器是 daemon 数据面的 HTTP 客户端。两者要共享记忆，必须指向同一个数据库：同机可连接本地 daemon，跨机可用 SSH 将远端 daemon 的回环端口转到本机。各 Agent 共享事件和项目历史，不共享会话上下文本身；事件带有 Agent 标记，会话 ID 使用宿主前缀。旧数据可能没有 Agent 标记，不做猜测。
 
-| 属于 core | 属于 adapter |
+## 边界
+
+| core | adapter |
 |---|---|
-| events.db 的 schema 与迁移 | 数据库放在哪个目录（`~/.hermes/eventmem`） |
-| 事件的写入、向量编码、FTS/向量融合召回 | 召回块注入到哪一轮（`prefetch`） |
-| 项目词表与归档规则 | 工具的 JSON schema 与错误文案 |
-| 关系边的判定（margin、候选、tier） | 配置从哪读（`config.yaml` / 环境变量 / 远端） |
-| 夜间补算与游标 | 什么时候跑（systemd / cron / 宿主线程） |
-| `events.agent` 这一列（谁写的） | 声明自己叫什么：`EventMem(settings, agent="hermes")`、会话 id 前缀 |
-| 渲染块的行格式与预算 | 渲染给谁看（模型 / 用户 / 另一个 agent） |
+| SQLite schema、事件与项目存储 | 适配宿主的插件、工具、配置与生命周期 |
+| FTS / 可选向量检索与召回渲染 | 将召回结果注入宿主会话 |
+| 候选选择、关系判定策略与后台 worker | 调用宿主辅助模型抽取事件 |
+| 决策后端和 daemon 数据面 | 对宿主侧输入做校验及转换 |
 
-判据很简单：**换一个宿主，这段代码还成立吗？** 成立就在 core。
+Core 不负责调用通用模型从对话里抽事件；由各 adapter 接入各自的宿主模型。Hermes 通过 `EventMem` 接口调用 core；DSH 不直接访问 SQLite，而是通过 [数据面 API](api.md) 读写。DSH 的 `evt_add` 接受并校验 `links`，但目前不会通过数据面写入它们，后台判边也不保证复现这些链接；详见 [DSH adapter](../adapters/dsh/README.md)。
 
-## core 的三个入口
+## 数据流
+
+1. **写入**：Agent 主动调用工具，或 adapter 在回合末调用宿主辅助模型抽取事件；事件和可选 artifact 写入数据库。
+2. **连边**：worker 选择候选事件对，调用配置的决策后端并按策略保存结果。参见[关系与连边](relations.md)。
+3. **召回**：FTS5 和可选的向量检索寻找事件，按召回策略加入相关关系和上下文；adapter 把结果提供给宿主。
+4. **人工检查**：控制台图谱可以查看和修正事件及关系。事件通常以新增记录表达变化，但手工编辑和删除可修改已有数据，因此不应把数据库视为不可变审计日志。
+
+## 部署边界
+
+- 一个数据库只运行一个 daemon。不要依赖自动锁来避免重复实例：Windows 上缺少 `fcntl` 时 daemon 的单实例锁会禁用。
+- SQLite/WAL 留在本机磁盘，不放网络共享目录。跨机器通过 daemon 的 HTTP API 和 SSH 隧道共享数据，不直接共享数据库文件。
+- daemon 的 API 与管理台没有内置鉴权，默认监听 `127.0.0.1`，但监听地址可配置。不要暴露到不可信网络；跨机访问使用 SSH。更多安全注意事项见 [API](api.md)。
+- 向量模型和关系判定后端都是可选项：缺少 encoder 时只使用 FTS5；没有可用的判定后端时事件存储和召回仍可使用，但不会自动产生关系。
+
+## Core API 示例
 
 ```python
 from eventmem_core import EventMem, CoreSettings, apply
@@ -41,58 +44,11 @@ settings = apply(CoreSettings(db_path="/path/events.db"), {
     "edges": {"margin": 0.2},
     "recall": {"budget_tokens": 800},
 })
-mem = EventMem(settings, agent="hermes")   # 这个实例代表哪个宿主：写进 events.agent
+mem = EventMem(settings, agent="hermes")
+mem.add_project("小主机")
 mem.add_event("结果", "……", project="小主机", session="hermes:s1")
 mem.recall("上次那个盘怎么选的？", state=mem.new_recall_state())
-mem.build_edges(since_ts)          # 一轮连边（需要决策模型）
 mem.close()
 ```
 
-- `EventMem` 是**唯一**的 API 面。adapter 不许 import `eventmem_core.store` 去拼 SQL。
-- `CoreSettings` 是 frozen dataclass；要改就 `apply()` 出新对象，不要原地改。
-- `apply()` 的契约：未知键告警忽略、坏值告警回落、越界值拒绝。**配置写错不能让记忆挂掉。**
-
-## adapter 的形状（以 Hermes 为例）
-
-| 文件 | 干什么 | 换宿主时要重写吗 |
-|---|---|---|
-| `__init__.py` | `register(ctx)`：装 provider、中间件、aux 任务 | 是（别的宿主的插件协议不同） |
-| `provider.py` | `MemoryProvider` 生命周期、prefetch、sync_turn | 是 |
-| `tools.py` | 7 个工具的 schema + 分发 + 参数校验 | 大部分是（工具名/文案） |
-| `middleware.py` | 「这个工具改了状态」判定（Hermes 工具名 + shell 语法） | 是 |
-| `extract.py` | 回合末抽取的提示词与 JSON 解析 | 基本可复用 |
-| `settings.py` | `config.yaml` → `CoreSettings` | 是 |
-| `cli.py` / `run.py` | 脱离会话的 nightly / worker 入口 | 是 |
-| `host.py` | 所有 `agent.*` 依赖集中在这一个文件 | 是 |
-
-写新 adapter 的时候，先把 `host.py` 对应的那几个能力找齐：
-**调一次辅助模型、脱敏、判断「这句话不值得记」、在宿主上下文里起线程。**
-
-## 数据流
-
-**写**：模型调 `evt_add` → adapter 校验（kind、项目词表、批次上限、links 方向）
-→ 脱敏 → `EventMem.add_event()`（编码向量、写 events/event_projects）
-→ 批次内 links 走 `EventMem.add_link()`。
-
-**读**：宿主每轮问 `prefetch(query)` → adapter 编一次 query 向量
-→ `EventMem.recall()`（向量 + FTS → RRF → 骨架段 + 命中段）
-→ 拼上 `project_hint` 一行 → 返回给宿主注入。
-
-**边**：worker 每 60 s 看游标之后有没有新事件 → 有就 `build_edges`
-→ 候选（活跃链头 / 同会话 / 跨项目 / 决策骨架）→ 两问 choice
-→ `margin` 判定 → `add_edge` → 推游标（高水位）。
-
-## 为什么这样拆
-
-- **一个宿主多个进程**：Hermes 的 dashboard / gateway / 每个桌面会话都是完整后端，
-  插件会被加载很多次。连边必须是独立进程，不是「插件里的线程」——所以 worker 在 core。
-- **宿主会换**：DeepSeek Harness 的插件协议、配置位置、模型调用都和 Hermes 不同，
-  但「margin 0.15 才写边」「骨架 5 条」「RRF k=60」这些不该跟着重写。
-- **参数要能说清**：之前所有阈值是模块常量，改一个要改代码。现在 default 仍在 core，
-  adapter 只决定从哪里读——于是 `--print-settings` 能一眼看到这次到底用了什么。
-
-## 不再做的事
-
-- 不在 core 里 `import agent.*`（`tests/test_settings.py::test_core_never_imports_a_host`）。
-- 不在 adapter 里写 SQL 或召回逻辑。
-- 不复制默认值到 adapter：`test_defaults_are_the_pre_split_values` 钉住 core 的那一份。
+示例中的数据库父目录须已存在；项目须先创建（或使用已有项目）。配置细节见 [settings](settings.md)，决策后端见 [backends](backends.md)。
