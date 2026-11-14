@@ -67,9 +67,10 @@ const CSS = `
    into the 176x56 card at --m 1, and its border-radius goes 10px -> 9px, which is exactly a
    circle at 20px. Everything (size, radius, which label shows) is driven by the single
    --m custom property, so the shape transform is continuous instead of a cross-fade.
-   The card body never gets transform-scaled, so its text stays crisp at every size. */
+   The card is a fixed 172x54 layout scaled by --sc, so the text shrinks with the box instead
+   of being clipped by it. */
 .em-atom{position:absolute;left:0;top:0;width:176px;height:56px;pointer-events:none;
-  user-select:none;contain:layout style paint;will-change:transform}
+  user-select:none;contain:layout style paint}
 /* The wrapper is 176x56 and the body shrinks inside it, so the body must be centred —
    anchored top-left it drifts away from the projected point and the edges then miss it. */
 .em-atom-body{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);overflow:hidden;box-sizing:border-box;
@@ -81,13 +82,21 @@ const CSS = `
   background:color-mix(in srgb,var(--em-kind-color,var(--ui-text-secondary)) calc(var(--f,0) * 100%),var(--ui-bg-card));
   border-style:solid;
   border-color:color-mix(in srgb,var(--em-kind-color,var(--ui-text-secondary)) calc((1 - var(--m,0)) * 100%),var(--ui-stroke-secondary));
-  border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));border-left-color:var(--em-kind-color,var(--ui-text-secondary));
-  box-shadow:0 2px 8px color-mix(in srgb,var(--ui-base) 30%,transparent)}
+  border-width:1px;border-left-width:calc(1px + 2px * var(--m,0));border-left-color:var(--em-kind-color,var(--ui-text-secondary))}
+/* 被筛掉/淡出的原子不能还能点：wrapper 本来就是 pointer-events:none，真正的命中面是
+   body，所以这条必须落在 body 上，写 inline style 到 wrapper 是无效的。 */
+.em-atom[data-hit="0"] .em-atom-body{pointer-events:none}
 .em-atom-num{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;
   font:700 8px/1 var(--font-mono,ui-monospace,monospace);color:var(--ui-text-secondary);
   opacity:calc((1 - var(--m,0)) * (1 - var(--f,0)));pointer-events:none}
-.em-atom-card{position:absolute;left:0;top:0;width:176px;height:56px;box-sizing:border-box;
-  padding:5px 9px;pointer-events:none;opacity:clamp(0,calc((var(--m,0) - 0.5) * 2.4),1)}
+/* 卡片保持固定排版（172x54），再整体缩放到 body 的内容框：文字跟着一起缩，不会被
+   越来越小的盒子裁掉。缩放走 transform，不改字号，动画期间不会重新排版。 */
+.em-atom-card{position:absolute;left:50%;top:50%;width:172px;height:54px;box-sizing:border-box;
+  padding:5px 9px;pointer-events:none;transform:translate(-50%,-50%) scale(var(--sc,1));transform-origin:50% 50%;
+  opacity:clamp(0,calc((var(--m,0) - 0.34) * 1.8),1)}
+/* 卡片在缩放，文字也要重新光栅化；单独提层后 scale 变成合成器变换。只在卡片真的
+   出现时提层（data-card=1）——几百张卡全提层的显存代价比省下来的还大。 */
+.em-atom[data-card="1"] .em-atom-card{will-change:transform;backface-visibility:hidden}
 .em-atom[data-kind="决定"] .em-atom-body{--em-kind-color:#7ea9e0}
 .em-atom[data-kind="尝试"] .em-atom-body{--em-kind-color:#68c3ba}
 .em-atom[data-kind="结果"] .em-atom-body{--em-kind-color:#79c08c}
@@ -371,6 +380,52 @@ function atomPasses(ev, filters, idSet, semIds, semActive) {
 }
 
 const edgeRelKey = e => (e.kind === 'none' ? 'none' : e.rel)
+
+/**
+ * 选中一颗原子后的「焦点邻域」：它自己、全部一跳邻居，以及按舞台预算挑出的最多
+ * 16 颗二跳原子（和舞台上排位置的那批一致）。一跳全部点亮；舞台上被摆到 2.8 半径
+ * 的是前 16 颗一跳，被摆到 5 的是那批二跳。
+ *
+ * 这份结果同时决定三件事，所以只能有一处算法：
+ *   - 画面上哪些原子被点亮（ring），其余原子淡出；
+ *   - 选中后哪些边被高亮（edges）：只有与中心相连的关系边；
+ *   - 高亮的东西哪些可以直接点中（ring / edges 的成员）——不必先退出再点。
+ * 灰色「判过、无关系」的对不是关系边，永远不进这里。
+ */
+function atomFocusRing(scene, id) {
+  const center = scene.byId.get(id)
+  if (!center) return null
+  const adjacency = new Map()
+  for (const e of scene.edges) {
+    if (e.kind !== 'rel') continue
+    if (!adjacency.has(e.src)) adjacency.set(e.src, new Set())
+    if (!adjacency.has(e.dst)) adjacency.set(e.dst, new Set())
+    adjacency.get(e.src).add(e.dst)
+    adjacency.get(e.dst).add(e.src)
+  }
+  const direct = [...(adjacency.get(id) || [])]
+    .filter(other => scene.byId.has(other)).sort((x, y) => x - y)
+  const directSet = new Set(direct)
+  const first = direct.slice(0, 16)
+  const second = new Set()
+  for (const other of first) {
+    for (const mate of adjacency.get(other) || []) {
+      if (mate !== id && !directSet.has(mate) && scene.byId.has(mate)) second.add(mate)
+    }
+  }
+  const secondList = [...second].sort((x, y) => x - y).slice(0, 16)
+  const ring = new Set([id, ...direct, ...secondList])
+  const edges = new Set()
+  for (const e of scene.edges) {
+    if (e.kind !== 'rel') continue
+    if (e.src === id || e.dst === id) edges.add(e.key)
+  }
+  return { center, direct, first, second: secondList, ring, edges }
+}
+
+const IN_GRAPH_STAGE = target => Boolean(
+  target && target.closest && target.closest('.em-stage')
+)
 
 // 下拉选项的取值：项目的「未归类」是空 project，会话没有 id 时不可选。
 const FACET_VALUE = {
@@ -867,6 +922,7 @@ function Scene({
   showLabels,
   camRef,
   posRef,
+  focusRing,
   onSelectAtom,
   onSelectEdge,
   onBackground,
@@ -884,8 +940,10 @@ function Scene({
   const haloRef = useRef('#0f1115')
   // 选中时只留焦点邻域，其余原子整个收起来；按 (选择, 过滤器, 场景) 身份缓存。
   const visRef = useRef({ key: '', fi: null, scene: null, set: null })
-  // All direct neighbors remain visible; a bounded sample of both layers is pulled out.
-  const ringRef = useRef(null)
+  // 选中的原子 → 它的两层邻域。父组件用 sel 算好传下来，舞台这一帧就能直接用，
+  // 不必等 focusReq 的副作用跑完（否则换选时会有几帧亮错人）。
+  const focusRingRef = useRef(focusRing)
+  focusRingRef.current = focusRing
   const retreatEndRef = useRef(0)
   const fadeRef = useRef({ key: null, scene: null, values: new Map(), t: 0 })
   const avoidRef = useRef(null)
@@ -894,6 +952,21 @@ function Scene({
   const movedRef = useRef(0)
   const atomAnims = useRef(new Map())
   const flightRef = useRef({ velocity: 0, last: null })
+  // Idle bookkeeping: the drift is a 0.025-unit float, so a full-scene repaint for it at
+  // 60fps buys nothing. While nothing but drift is moving we draw at ~30fps and skip the
+  // morph pass entirely (the camera did not move, so --m/--f cannot have changed).
+  const lastInputRef = useRef(0)
+  const lastDrawRef = useRef(0)
+  const fadeBusyRef = useRef(false)
+  // How many edges were on screen last frame: drives the adaptive edge stride. The scene
+  // has thousands of edges but only a couple of thousand are visible at once, and the
+  // stroke cost (not the JS loop) is what makes the canvas expensive.
+  const edgeLoadRef = useRef(0)
+  const frontDirtyRef = useRef(false)
+  // The morph pass must run at least once with the scene it belongs to, even if the camera
+  // is parked (otherwise the first paint has no --m/--f and everything is a dot).
+  const morphReadyRef = useRef(false)
+  const morphSceneRef = useRef(null)
   const lastReqRef = useRef(0)
   const sceneRef = useRef(scene)
   sceneRef.current = scene
@@ -908,6 +981,64 @@ function Scene({
   selRef.current = sel
   const labelsRef = useRef(showLabels)
   labelsRef.current = showLabels
+
+  // Bench-only introspection: the harness needs to tell "atom is outside the frustum" apart
+  // from "the focus fade never reached it". Off unless the page opts in.
+  if (typeof window !== 'undefined' && window.__EM_GRAPH_DEBUG) {
+    window.__emGraphState = () => {
+      const fade = fadeRef.current
+      return {
+        fadeKey: fade.key,
+        fadeShown: fade.shown ? fade.shown.size : null,
+        fadeT: Math.round(fade.t),
+        visKey: visRef.current.key,
+        visSet: visRef.current.set ? visRef.current.set.size : null,
+        fiFocus: focusRef.current && focusRef.current.focus ? focusRef.current.focus.size : null,
+        els: atomEls.current.size,
+        screen: screenRef.current.size,
+        camDist: +camRef.current.dist.toFixed(2),
+        camFit: +camRef.current.fit.toFixed(2),
+        now: Math.round(performance.now()),
+        hitEdges: hitRef.current.length,
+        hitKeys: hitRef.current.map(seg => seg.key),
+        ring: focusRingRef.current ? [...focusRingRef.current.ring] : null
+      }
+    }
+    window.__emEdgeHits = () => hitRef.current.map(seg => ({
+      key: seg.key, src: seg.edge.src, dst: seg.edge.dst,
+      rel: seg.edge.rel, kind: seg.edge.kind,
+      x1: seg.x1, y1: seg.y1, cx: seg.cx, cy: seg.cy, x2: seg.x2, y2: seg.y2
+    }))
+    window.__emRingLayers = () => {
+      const ring = focusRingRef.current
+      if (!ring) return null
+      return {
+        id: ring.center.id,
+        direct: [...ring.direct],
+        first: [...ring.first],
+        second: [...ring.second]
+      }
+    }
+    window.__emAtomState = ids => ids.map(id => {
+      const p = screenRef.current.get(id)
+      const alpha = fadeRef.current.values.get(id)
+      const el = atomEls.current.get(id)
+      const dom = document.querySelector(`[data-id="${id}"]`)
+      const base = {
+        id, alpha: alpha === undefined ? null : +alpha.toFixed(3),
+        same: el === dom,
+        disp: el ? el.style.display : null,
+        domDisp: dom ? dom.style.display : null,
+        connected: el ? el.isConnected : null
+      }
+      if (!p) return { ...base, culled: true }
+      return {
+        ...base,
+        x: Math.round(p.x), y: Math.round(p.y),
+        depth: +p.depth.toFixed(2), visibility: +p.visibility.toFixed(3)
+      }
+    })
+  }
 
   useEffect(() => {
     camRef.current.dirty = true
@@ -1031,13 +1162,17 @@ function Scene({
       }
 
       // Display drift requires continuous redraw, but never changes stored positions.
-      cam.dirty = true
-      if (!cam.dirty) return
+      const busy = Boolean(cam.anim) || flight.velocity !== 0 || anims.size > 0
+        || Boolean(dragRef.current) || fadeBusyRef.current
+        || now - lastInputRef.current < 320
+      const idle = !busy
+      if (idle && now - lastDrawRef.current < 32) return
       cam.dirty = false
-      draw(now, cam)
+      lastDrawRef.current = now
+      draw(now, cam, idle)
     }
 
-    const draw = (now, cam) => {
+    const draw = (now, cam, idle) => {
       const { w, h } = sizeRef.current
       if (!w || !h) return
       const b = cameraBasis(cam)
@@ -1087,7 +1222,9 @@ function Scene({
           const set = new Set()
           if (selNow.type === 'atom') {
             set.add(selNow.id)
-            if (ringRef.current) for (const id of ringRef.current) set.add(id)
+            // 父组件按同一颗原子算好的两层邻域；拿不到时退回一跳邻居。
+            const ring = focusRingRef.current
+            if (ring && ring.center.id === selNow.id) for (const id of ring.ring) set.add(id)
             else {
               for (const e of scene.edges) {
                 if (e.kind !== 'rel') continue
@@ -1126,6 +1263,7 @@ function Scene({
         fade.t = now
       }
       const fadeT = clamp((now - fade.t) / 450, 0, 1)
+      fadeBusyRef.current = fadeT < 1
       if (fadeT < 1) cam.dirty = true
       const alphaFor = id => {
         const target = targetAlpha(id)
@@ -1159,80 +1297,154 @@ function Scene({
       }
 
       const positions = new Map()
+      // Per-atom write cache. It must be the single source of truth for what was last
+      // written: hiding an atom through any path has to go through it too, otherwise the
+      // next frame computes `display: ''`, sees the cache already saying `''`, skips the
+      // write, and the atom stays hidden for good.
+      const cacheFor = el => el.__em || (el.__em = {
+        tx: '', ty: '', op: '', z: null, hit: null, sel: null, multi: null, disp: '',
+        m: null, f: null, sc: null, card: null, w: 20, h: 20
+      })
+      const hide = el => {
+        if (!el) return
+        if (el.style.display !== 'none') el.style.display = 'none'
+        cacheFor(el).disp = 'none'
+      }
       for (const atom of scene.atoms) {
         const el = atomEls.current.get(atom.id)
         const visibility = alphaFor(atom.id)
         if (visibility <= 0.001) {
           positions.set(atom.id, null)
-          if (el) el.style.display = 'none'
+          hide(el)
           continue
         }
         const p = project(world.get(atom.id))
         const stable = project(stableWorld.get(atom.id))
         if (stable.x < -4000 || stable.x > w + 4000 || stable.y < -4000 || stable.y > h + 4000) {
           positions.set(atom.id, null)
-          if (el) el.style.display = 'none'
+          hide(el)
           continue
         }
         const isSelAtom = selNow && selNow.type === 'atom' && selNow.id === atom.id
-        positions.set(atom.id, { x: p.x, y: p.y, z: p.z, depth: p.depth, distance: stable.distance, stable, k: p.k, el, isSelAtom, visibility })
+        const entry = {
+          x: p.x, y: p.y, z: p.z, depth: p.depth, distance: stable.distance,
+          stable, k: p.k, el, isSelAtom, visibility, w: 20, h: 20
+        }
+        positions.set(atom.id, entry)
         if (!el) continue
+        // The loop runs for every visible atom on every frame, and rewriting identical
+        // inline styles is pure overhead (and re-invalidates style for the whole 176x56
+        // subtree). Compare first, write only on a real change.
+        const cache = cacheFor(el)
+        entry.w = cache.w
+        entry.h = cache.h
         const nearOpacity = smoothstep(0.05, 0.65, stable.depth)
         const opacity = nearOpacity * visibility
-        el.style.display = opacity > 0.001 ? '' : 'none'
-        el.style.opacity = String(opacity)
-        el.style.pointerEvents = opacity > 0.5 && (!shown || shown.has(atom.id) || (selNow && selNow.type === 'atom' && visibility > 0.5)) ? '' : 'none'
-        el.style.transform = `translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0) translate(-50%, -50%)`
-        el.dataset.selected = isSelAtom ? '1' : '0'
-        el.dataset.multi = multiRef.current && multiRef.current.has(atom.id) ? '1' : '0'
-        el.style.zIndex = isSelAtom ? '34000' : String(Math.round(20000 - p.z * 100))
+        const disp = opacity > 0.001 ? '' : 'none'
+        if (cache.disp !== disp) { el.style.display = disp; cache.disp = disp }
+        const opText = opacity.toFixed(2)
+        if (cache.op !== opText) { el.style.opacity = opText; cache.op = opText }
+        const clickable = opacity > 0.5 && (!shown || shown.has(atom.id)
+          || (selNow && selNow.type === 'atom' && visibility > 0.5))
+        const hit = clickable ? '1' : '0'
+        if (cache.hit !== hit) { el.dataset.hit = hit; cache.hit = hit }
+        const tx = p.x.toFixed(1)
+        const ty = p.y.toFixed(1)
+        if (cache.tx !== tx || cache.ty !== ty) {
+          el.style.transform = `translate3d(${tx}px, ${ty}px, 0) translate(-50%, -50%)`
+          cache.tx = tx
+          cache.ty = ty
+        }
+        const selFlag = isSelAtom ? '1' : '0'
+        if (cache.sel !== selFlag) { el.dataset.selected = selFlag; cache.sel = selFlag }
+        const multiFlag = multiRef.current && multiRef.current.has(atom.id) ? '1' : '0'
+        if (cache.multi !== multiFlag) { el.dataset.multi = multiFlag; cache.multi = multiFlag }
+        const z = isSelAtom ? 34000 : Math.round(20000 - p.z * 100)
+        if (cache.z !== z) { el.style.zIndex = String(z); cache.z = z }
+        entry.clickable = clickable
       }
 
       // 卡片预算：钻进云团时把最近的一批变成卡片，更远的继续当小球，
       // 否则几百张卡会互相压住。（排名变化是连续的，过渡带也做了衰减，不会跳。）
       screenRef.current = positions
       const CARD_BUDGET = 46
-      const ranked = []
-      for (const [id, p] of positions) if (p && p.el) {
-        // Behind-eye and off-screen nodes cannot consume the on-screen card budget.
-        p.w = 20
-        p.h = 20
-        if (p.stable.depth > 0.35 && p.stable.x >= -88 && p.stable.x <= w + 88 && p.stable.y >= -28 && p.stable.y <= h + 28) ranked.push(p)
-        else {
-          p.el.style.setProperty('--m', '0')
-          p.el.style.setProperty('--f', farFactor(startDist / Math.max(p.distance, 0.01)).toFixed(3))
+      // While the camera is parked, --m/--f/--sc cannot change (only the drift moves,
+      // by ~0.02 units), so skip the whole morph pass and reuse the cached geometry.
+      const morphDirty = !idle || !morphReadyRef.current || morphSceneRef.current !== scene
+      if (morphDirty) {
+        morphReadyRef.current = true
+        morphSceneRef.current = scene
+        const ranked = []
+        for (const [, p] of positions) {
+          if (!p || !p.el) continue
+          // Behind-eye and off-screen nodes cannot consume the on-screen card budget.
+          if (p.stable.depth > 0.35 && p.stable.x >= -88 && p.stable.x <= w + 88 && p.stable.y >= -28 && p.stable.y <= h + 28) ranked.push(p)
+          else writeMorph(p, 0, farFactor(startDist / Math.max(p.distance, 0.01)))
+        }
+        ranked.sort((a, b) => a.distance - b.distance)
+        for (let i = 0; i < ranked.length; i += 1) {
+          const p = ranked[i]
+          // 远景收缩与球→卡共用同一个 rel：rel 越小（离得越远）越接近「一点颜色」。
+          p.far = farFactor(startDist / Math.max(p.distance, 0.01))
+          p.baseMorph = smoothstep(0.3, 0.72, clamp(startDist / Math.max(p.distance, 0.01), 0.26, 1.06))
+          if (i >= CARD_BUDGET) p.baseMorph *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
+        }
+        // 只有真的会画成卡片的邻居才参与「让位」计算：几百颗远处的点不该每帧比一遍。
+        const near = ranked.filter(p => p.baseMorph >= 0.1)
+        for (const p of ranked) {
+          // Smoothly share the card space when near-equal depths exchange order.
+          let m = p.baseMorph
+          for (const q of near) {
+            if (q === p) continue
+            const separation = Math.max(Math.abs(p.stable.x - q.stable.x) / 176, Math.abs(p.stable.y - q.stable.y) / 56)
+            const priority = smoothstep(-0.3, 0.3, p.distance - q.distance)
+            m *= 1 - priority * smoothstep(0.1, 0.5, q.baseMorph) * (1 - smoothstep(0.55, 1.08, separation))
+          }
+          writeMorph(p, m, p.far)
         }
       }
-      ranked.sort((a, b) => a.distance - b.distance)
-      for (let i = 0; i < ranked.length; i += 1) {
-        const p = ranked[i]
-        // 远景收缩与球→卡共用同一个 rel：rel 越小（离得越远）越接近「一点颜色」。
-        p.far = farFactor(startDist / Math.max(p.distance, 0.01))
-        p.baseMorph = smoothstep(0.3, 0.72, clamp(startDist / Math.max(p.distance, 0.01), 0.26, 1.06))
-        if (i >= CARD_BUDGET) p.baseMorph *= 1 - smoothstep(1, 1.6, i / CARD_BUDGET)
-      }
-      for (const p of ranked) {
-        // Smoothly share the card space when near-equal depths exchange order.
-        let m = p.baseMorph
-        for (const q of ranked) {
-          if (q === p || q.baseMorph < 0.1) continue
-          const separation = Math.max(Math.abs(p.stable.x - q.stable.x) / 176, Math.abs(p.stable.y - q.stable.y) / 56)
-          const priority = smoothstep(-0.3, 0.3, p.distance - q.distance)
-          m *= 1 - priority * smoothstep(0.1, 0.5, q.baseMorph) * (1 - smoothstep(0.55, 1.08, separation))
-        }
+
+      /**
+       * Body geometry for one atom, plus the card's uniform scale. The card keeps its
+       * 172x54 layout and is scaled down to the body's content box, so the text scales
+       * with the box instead of being clipped by it (the old fixed 9px text in a
+       * shrinking box was what looked cut off mid-word).
+       */
+      function writeMorph(p, m, far) {
+        const el = p.el
+        const cache = cacheFor(el)
+        const base = 20 - 14 * far
+        const bodyW = base + 156 * m
+        const bodyH = base + 36 * m
+        const contentW = bodyW - 2 - 2 * m
+        const contentH = bodyH - 2
+        const sc = clamp(Math.min(contentW / 172, contentH / 54), 0.04, 1)
+        p.w = bodyW
+        p.h = bodyH
         p.m = m
-        // 连线的锚点必须用和 CSS 同一套尺寸：小球基数 20px 随 --f 收到 6px，卡片再按 --m 长。
-        const base = 20 - 14 * p.far
-        p.w = base + 156 * m
-        p.h = base + 36 * m
-        p.el.style.setProperty('--m', m.toFixed(3))
-        p.el.style.setProperty('--f', p.far.toFixed(3))
+        cache.w = bodyW
+        cache.h = bodyH
+        const mText = m.toFixed(3)
+        const fText = far.toFixed(3)
+        const scText = sc.toFixed(3)
+        if (cache.m !== mText) { el.style.setProperty('--m', mText); cache.m = mText }
+        if (cache.f !== fText) { el.style.setProperty('--f', fText); cache.f = fText }
+        if (cache.sc !== scText) { el.style.setProperty('--sc', scText); cache.sc = scText }
+        // Layer promotion only for cards that are actually on screen; the 0.05 band is
+        // hysteresis so a card hovering at the threshold cannot thrash its layer.
+        const cardOn = cache.card === '1' ? m > 0.28 : m > 0.33
+        const cardFlag = cardOn ? '1' : '0'
+        if (cache.card !== cardFlag) { el.dataset.card = cardFlag; cache.card = cardFlag }
       }
 
       // ---- edges, on canvas -------------------------------------------------
       // One Path2D per (color, opacity, width) bucket: thousands of edges collapse into
       // a few dozen stroke() calls, and nothing in this loop touches the DOM.
-      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      // The canvas is capped at 1.25x even on 2x displays: these are 1px, low-opacity
+      // hairlines, and at 2x the stroke fill is the single most expensive thing on the
+      // page (hiding the canvas doubles the frame rate at 2560x1440). DOM text stays at
+      // the real DPR, so nothing legible loses sharpness.
+      const dpr = Math.min(1.25, window.devicePixelRatio || 1)
       const prep = el => {
         if (!el) return null
         const pw = Math.round(w * dpr)
@@ -1247,7 +1459,11 @@ function Scene({
         return c
       }
       const back = prep(backRef.current)
-      const front = prep(frontRef.current)
+      // The front canvas carries selection/hover highlights and labels. Preparing it clears
+      // a full-viewport bitmap; with no selection that is pure waste, so it is prepared
+      // lazily below (and cleared once after the last highlight disappears).
+      let front = null
+      let frontDirty = frontDirtyRef.current
 
       // 连线从卡片/小球的边缘出发，不从中心穿过去。
       // 连线锚点用卡片“当前”的尺寸（小球 20px、满卡 176x56），随 --m 连续变化。
@@ -1267,6 +1483,13 @@ function Scene({
       const coarse = zoomOut > 1.6
       const midCoarse = !coarse && zoomOut > 0.95
       const sampleEdge = (e, n) => (e.key.length + e.key.charCodeAt(0) + e.key.charCodeAt(e.key.length - 1)) % n === 0
+      // Edge stride follows how many edges are actually on screen, not the zoom level:
+      // the opening camera sits inside the cloud at a "close" zoom and used to stroke all
+      // of them. Relation edges keep priority; the grey "judged, no relation" haze is
+      // thinned twice as hard — it is background texture, not data.
+      const load = edgeLoadRef.current
+      const baseStride = load > 2400 ? 3 : load > 1400 ? 2 : 1
+      let onScreen = 0
       const buckets = new Map()
       const labels = []
       const hotEdges = []
@@ -1289,10 +1512,11 @@ function Scene({
         const edgeVisibility = Math.min(a.visibility, c.visibility)
         const isSel = selKey === edge.key
         const hot = selNow && selNow.type === 'atom' && edge.kind === 'rel' && (edge.src === selNow.id || edge.dst === selNow.id)
-        if (!isSel && !hot && coarse && !sampleEdge(edge, 4)) continue
-        if (!isSel && !hot && midCoarse && !sampleEdge(edge, 2)) continue
         const offP = p => p.x < -80 || p.x > w + 80 || p.y < -80 || p.y > h + 80
         if (!isSel && offP(a) && offP(c)) continue
+        onScreen += 1
+        const stride = edge.kind === 'none' ? Math.min(8, baseStride * 2) : baseStride
+        if (!isSel && !hot && stride > 1 && !sampleEdge(edge, stride)) continue
 
         const dx = c.x - a.x
         const dy = c.y - a.y
@@ -1316,9 +1540,12 @@ function Scene({
           ? Math.max(0.16 * crossFade, coarse ? 0.12 : 0.09)
           : 0.17 * crossFade * depthFade
 
-        const clickableEndpoint = p => p.depth > 0.35 && p.visibility > 0.5 && p.el && p.el.style.pointerEvents !== 'none'
-        if (edgeVisibility > 0.5 && clickableEndpoint(a) && clickableEndpoint(c))
+        // 边平常只是背景纹理，不进命中表：必须先点中一颗原子，之后只有与它相连、
+        // 画面上被点亮（hot）的那几条边才能点。这样点空白处永远不会「误中」一条边。
+        const clickableEndpoint = p => p.depth > 0.35 && p.visibility > 0.5 && p.clickable
+        if (hot && edgeVisibility > 0.5 && clickableEndpoint(a) && clickableEndpoint(c)) {
           screenEdges.push({ key: edge.key, edge, x1: A.x, y1: A.y, x2: C.x, y2: C.y, cx: ctlX, cy: ctlY })
+        }
 
         if (isSel) {
           selEdge = { color, x1: A.x, y1: A.y, cx: ctlX, cy: ctlY, x2: C.x, y2: C.y, width }
@@ -1350,6 +1577,15 @@ function Scene({
           alpha: isSel ? 1 : 0.7,
           selected: isSel
         })
+      }
+      // Smoothed so a strafing camera does not flicker between two strides.
+      edgeLoadRef.current = Math.round(load * 0.7 + onScreen * 0.3)
+
+      // Only touch the front canvas when it has something to hold (or has to be wiped).
+      if (selEdge || hotEdges.length || labels.length || frontDirty) {
+        front = prep(frontRef.current)
+        frontDirty = Boolean(selEdge || hotEdges.length || labels.length)
+        frontDirtyRef.current = frontDirty
       }
 
       if (back) {
@@ -1435,7 +1671,6 @@ function Scene({
     const interrupted = [...atomAnims.current].filter(([, anim]) => anim.changed).map(([id]) => id)
     atomAnims.current.clear()
     if (interrupted.length) handlersRef.current.onMoved(interrupted)
-    ringRef.current = null
     const b = cameraBasis(cam)
     const focal = h / 2 / Math.tan(FOV / 2)
     const usableW = Math.max(320, w - 404)
@@ -1451,27 +1686,19 @@ function Scene({
       })
 
     if (req.mode === 'atom') {
-      const a = scene.byId.get(req.id)
-      if (!a) return
+      // 舞台排布用这份邻域；点亮/可点集合是父组件用同一函数算好传下来的 focusRing，
+      // 两边同源，不会各算一套。
+      const ring = atomFocusRing(scene, req.id)
+      if (!ring) return
+      const a = ring.center
       // 后撤至当前星团之外，再按图距离依次拉开两层；保持每个方向的三维分量。
       // Keep the focus anchored. Fixed shell radii make repeat expansion idempotent;
       // using the current cloud radius (or multiplying offsets) creates runaway growth.
       const to = { x: a.x, y: a.y, z: a.z }
       // Expand a deterministic sample of true relationships, leaving the full edge list
       // untouched for the inspector. Give both layers room even for high-degree nodes.
-      const adjacency = new Map()
-      for (const e of scene.edges) {
-        if (e.kind !== 'rel') continue
-        if (!adjacency.has(e.src)) adjacency.set(e.src, new Set())
-        if (!adjacency.has(e.dst)) adjacency.set(e.dst, new Set())
-        adjacency.get(e.src).add(e.dst)
-        adjacency.get(e.dst).add(e.src)
-      }
-      const direct = [...(adjacency.get(a.id) || [])].filter(id => scene.byId.has(id)).sort((x,y) => x-y)
-      // Fit the actual 3D positions of every direct neighbor before moving them.
-      // Depth matters: a neighbor nearer the eye needs more retreat than one behind.
       let retreat = Math.max(FOCUS_DIST, fitDistance(5, usableW / h))
-      for (const id of direct) {
+      for (const id of ring.direct) {
         const mate = scene.byId.get(id)
         const dx = mate.x - to.x, dy = mate.y - to.y, dz = mate.z - to.z
         const forward = dx*b.fx + dy*b.fy + dz*b.fz
@@ -1483,20 +1710,13 @@ function Scene({
       }
       animateCamera(cam, { fx: to.x, fy: to.y, fz: to.z, dist: retreat, panX, panY: 0 }, 800, 250)
       retreatEndRef.current = performance.now() + 1050
-      const directSet = new Set(direct)
-      const first = direct.slice(0, 16)
-      const second = new Set()
-      for (const id of first) for (const other of adjacency.get(id) || []) {
-        if (other !== a.id && !directSet.has(other) && scene.byId.has(other)) second.add(other)
-      }
       const levels = new Map([[a.id, 0]])
-      for (const id of first) levels.set(id, 1)
-      for (const id of [...second].sort((x,y) => x-y).slice(0, 16)) levels.set(id, 2)
-      ringRef.current = new Set([a.id, ...direct, ...levels.keys()])
+      for (const id of ring.first) levels.set(id, 1)
+      for (const id of ring.second) levels.set(id, 2)
       for (const [id, depth] of levels) {
         if (!depth) continue
         const mate = scene.byId.get(id)
-        const layer = depth === 1 ? first : [...levels].filter(([,d]) => d === 2).map(([i]) => i)
+        const layer = depth === 1 ? ring.first : ring.second
         const index = layer.indexOf(id)
         // Fibonacci sphere slots keep the layers volumetric rather than flattening
         // them into camera-facing rings. Stable slots make repeat expansion settle.
@@ -1551,9 +1771,40 @@ function Scene({
     if (el) el.style.display = 'none'
   }
 
+  // 边命中只在选中原子后的那几条高亮边上存在（见绘制循环），所以这里最多几十段，
+  // 点击与悬停光标共用同一份几何。
+  const pickEdgeAt = useCallback((x, y) => {
+    let best = null
+    let bestDist = 10
+    for (const seg of hitRef.current) {
+      let px = seg.x1
+      let py = seg.y1
+      for (let i = 1; i <= 12; i += 1) {
+        const t = i / 12
+        const mt = 1 - t
+        const qx = mt * mt * seg.x1 + 2 * mt * t * seg.cx + t * t * seg.x2
+        const qy = mt * mt * seg.y1 + 2 * mt * t * seg.cy + t * t * seg.y2
+        const dx = qx - px
+        const dy = qy - py
+        const len2 = dx * dx + dy * dy || 1
+        const tt = clamp(((x - px) * dx + (y - py) * dy) / len2, 0, 1)
+        const d = Math.hypot(x - (px + dx * tt), y - (py + dy * tt))
+        if (d < bestDist) {
+          bestDist = d
+          best = seg
+        }
+        px = qx
+        py = qy
+      }
+    }
+    return best
+  }, [])
+
   const onPointerDown = useCallback(
     e => {
       // 左键拖空白 = 平移相机；中键拖 = 转视角；左键按在原子 = 拖那颗原子；右键长按 = 框选。
+      lastInputRef.current = performance.now()
+      if (stageRef.current) stageRef.current.style.cursor = ''
       const rotate = e.button === 1
       if (e.button !== 0 && !rotate && e.button !== 2) return
       e.preventDefault()
@@ -1638,8 +1889,21 @@ function Scene({
 
   const onPointerMove = useCallback(
     e => {
-      // 右键还没按住够时长就动了 → 当误触，别再进框选。
       const lasso = lassoRef.current
+      if (!dragRef.current && !lasso.timer) {
+        // 悬停在可点的高亮边上时给手型光标；没有选中原子时命中表是空的，这段几乎零成本。
+        const stage = stageRef.current
+        if (!stage) return
+        if (hitRef.current.length) {
+          const box = stage.getBoundingClientRect()
+          const over = pickEdgeAt(e.clientX - box.left, e.clientY - box.top)
+          const want = over ? 'pointer' : ''
+          if (stage.style.cursor !== want) stage.style.cursor = want
+        } else if (stage.style.cursor) stage.style.cursor = ''
+        return
+      }
+      lastInputRef.current = performance.now()
+      // 右键还没按住够时长就动了 → 当误触，别再进框选。
       if (lasso.timer && !lasso.armed &&
           Math.hypot(e.clientX - lasso.x0, e.clientY - lasso.y0) > 4) {
         clearTimeout(lasso.timer)
@@ -1699,7 +1963,7 @@ function Scene({
         cam.dirty = true
       }
     },
-    [camRef, posRef, stopMotion]
+    [camRef, posRef, stopMotion, pickEdgeAt]
   )
 
   const onPointerUp = useCallback(e => {
@@ -1747,6 +2011,7 @@ function Scene({
   const onWheel = useCallback(
     e => {
       e.preventDefault()
+      lastInputRef.current = performance.now()
       const cam = camRef.current
       if (cam.anim || atomAnims.current.size) stopMotion()
       const b = cameraBasis(cam)
@@ -1782,6 +2047,8 @@ function Scene({
             'data-id': a.id,
             'data-kind': a.kind,
             'data-selected': '0',
+            'data-multi': '0',
+            'data-hit': '0',
             'data-edited': a.edited_ts ? '1' : '0',
             title: `${a.text}\n\n${fmtFull(a.ts)} · ${a.project || '未归类'}`,
             onClick: e => {
@@ -1838,33 +2105,13 @@ function Scene({
       if (movedRef.current > 5) return
       if (e.target !== e.currentTarget) return
       const rect = stageRef.current.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const y = e.clientY - rect.top
-      let best = null
-      let bestDist = 10
-      for (const seg of hitRef.current) {
-        let px = seg.x1
-        let py = seg.y1
-        for (let i = 1; i <= 12; i += 1) {
-          const t = i / 12
-          const mt = 1 - t
-          const qx = mt * mt * seg.x1 + 2 * mt * t * seg.cx + t * t * seg.x2
-          const qy = mt * mt * seg.y1 + 2 * mt * t * seg.cy + t * t * seg.y2
-          const dx = qx - px
-          const dy = qy - py
-          const len2 = dx * dx + dy * dy || 1
-          const tt = clamp(((x - px) * dx + (y - py) * dy) / len2, 0, 1)
-          const d = Math.hypot(x - (px + dx * tt), y - (py + dy * tt))
-          if (d < bestDist) {
-            bestDist = d
-            best = seg
-          }
-          px = qx
-          py = qy
-        }
-      }
+      const best = pickEdgeAt(e.clientX - rect.left, e.clientY - rect.top)
       if (best) handlersRef.current.onSelectEdge(best.edge)
       else handlersRef.current.onBackground()
+    },
+    onPointerLeave: () => {
+      const stage = stageRef.current
+      if (stage && stage.style.cursor) stage.style.cursor = ''
     },
     children: [
       jsx('div', { className: 'em-atom-layer', children: atomsTree }),
@@ -2391,6 +2638,9 @@ function GraphPage({ ctx }) {
   const pendingRef = useRef(new Set())
   const saveTimer = useRef(0)
   const barRef = useRef(null)
+  // 筛选面板是浮在图谱上面的一层：按下它外面时先关面板，这一下不再穿透到画布
+  // 去选中原子/边；第二次点才真正生效。这里存的是「这一下要吞掉」的时间戳。
+  const panelGuardRef = useRef(0)
   const camRef = useRef({
     yaw: 0.55,
     pitch: 0.26,
@@ -2575,7 +2825,10 @@ function GraphPage({ ctx }) {
   useEffect(() => {
     if (!panelOpen) return undefined
     const outside = e => {
-      if (barRef.current && !barRef.current.contains(e.target)) setPanelOpen(false)
+      if (barRef.current && barRef.current.contains(e.target)) return
+      // 点在图谱舞台上：这次按下只负责关掉面板，同一个点击不能穿透去选中东西。
+      if (IN_GRAPH_STAGE(e.target)) panelGuardRef.current = performance.now()
+      setPanelOpen(false)
     }
     const escape = e => {
       if (e.key === 'Escape') setPanelOpen(false)
@@ -2587,6 +2840,26 @@ function GraphPage({ ctx }) {
       document.removeEventListener('keydown', escape)
     }
   }, [panelOpen])
+
+  // 常驻的捕获阶段监听：门卫只挡「关面板的那一次点击」。每次新的按下先清门卫，
+  // 这样按下后拖开（不产生 click）不会把门卫留到下一次点击；时间戳再兜一层底。
+  useEffect(() => {
+    const press = () => { panelGuardRef.current = 0 }
+    const swallow = e => {
+      if (!panelGuardRef.current) return
+      const age = performance.now() - panelGuardRef.current
+      panelGuardRef.current = 0
+      if (age > 900 || !IN_GRAPH_STAGE(e.target)) return
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    document.addEventListener('pointerdown', press, true)
+    document.addEventListener('click', swallow, true)
+    return () => {
+      document.removeEventListener('pointerdown', press, true)
+      document.removeEventListener('click', swallow, true)
+    }
+  }, [])
 
   const patch = useCallback(update => {
     setFilters(prev => ({ ...prev, ...update }))
@@ -2636,28 +2909,58 @@ function GraphPage({ ctx }) {
   const sceneRef = useRef(scene)
   sceneRef.current = scene
 
+  // 与舞台高亮同一份邻域数据：哪两颗原子/哪几条边被点亮，就归哪一批可以一次点中。
+  const selRing = useMemo(
+    () => (scene && sel && sel.type === 'atom' ? atomFocusRing(scene, sel.id) : null),
+    [scene, sel]
+  )
+  // 选中一条边时，亮着的是它的两端：点这两颗也是直接换选，不必先退出。
+  const selEdgeEnds = useMemo(() => {
+    if (!scene || !sel || sel.type !== 'edge') return null
+    const edge = scene.edges.find(e => e.key === sel.key)
+    return edge ? new Set([edge.src, edge.dst]) : null
+  }, [scene, sel])
+
   const selectAtom = useCallback(
     (id, force) => {
-      // 已经有焦点时，点别的地方只负责退出；再点一次才选中新的。
+      // 有焦点时：点自己 = 退出；点被点亮的两层邻域（或选中边的两端）= 直接换选；
+      // 点别处仍然只退出（第二下才选中），保留原来防误点的规矩。
       if (sel && !force) {
-        setSel(null)
-        haptic('tap')
-        return
+        if (sel.type === 'atom' && sel.id === id) {
+          setSel(null)
+          haptic('tap')
+          return
+        }
+        const lit = (selRing && selRing.ring.has(id)) || (selEdgeEnds && selEdgeEnds.has(id))
+        if (!lit) {
+          setSel(null)
+          haptic('tap')
+          return
+        }
       }
       setSel({ type: 'atom', id })
       haptic('tap')
       seqRef.current += 1
       setFocusReq({ seq: seqRef.current, mode: 'atom', id })
     },
-    [sel]
+    [sel, selRing, selEdgeEnds]
   )
 
   const selectEdge = useCallback(
     (edge, force) => {
+      // 平常边不可点（舞台命中表是空的）；能走到这里的边来自「选中原子」后的高亮集合，
+      // 或者检查器里的明确点名。再点一次当前选中的边 = 退出。
       if (sel && !force) {
-        setSel(null)
-        haptic('tap')
-        return
+        if (sel.type === 'edge' && sel.key === edge.key) {
+          setSel(null)
+          haptic('tap')
+          return
+        }
+        if (!(selRing && selRing.edges.has(edge.key))) {
+          setSel(null)
+          haptic('tap')
+          return
+        }
       }
       // 筛选时把这根边的两头都算进焦点：拉过之后它们才点得动。
       if (filterInfo.active) {
@@ -2673,7 +2976,7 @@ function GraphPage({ ctx }) {
       seqRef.current += 1
       setFocusReq({ seq: seqRef.current, mode: 'edge', src: edge.src, dst: edge.dst })
     },
-    [sel, filterInfo]
+    [sel, selRing, filterInfo]
   )
 
   const onIdEnter = useCallback(() => {
@@ -2790,6 +3093,7 @@ function GraphPage({ ctx }) {
         camRef,
         posRef,
         onMoved,
+        focusRing: selRing,
         onSelectAtom: selectAtom,
         onSelectEdge: selectEdge,
         onLasso: ids => {

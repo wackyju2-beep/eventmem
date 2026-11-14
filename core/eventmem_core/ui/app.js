@@ -60,17 +60,79 @@ document.querySelectorAll("nav button").forEach((b) => {
 
 /* ------------------------------------------------------------------ health */
 
+/* 「服务真的重启了」的唯一判据是 instance_id 变了：pid 可能被 systemd 复用，ok 也不代表
+   新进程。重启请求发出后继续轮询，id 一变就收工；超过 120 s 没变就报未确认。 */
+let restartPending = null;
+let restartTimer = null;
+
+function setRestartStatus(text) {
+  const el = $("restart-status");
+  el.textContent = text || "";
+  el.style.display = text ? "" : "none";
+}
+
+function finishRestart(text) {
+  restartPending = null;
+  clearTimeout(restartTimer);
+  restartTimer = null;
+  $("restart").disabled = false;
+  setRestartStatus(text);
+}
+
 async function refreshHealth() {
   try {
     const h = await api("/api/health");
     $("health").textContent = "ok · schema " + h.schema + " · pid " + h.pid;
     $("health").className = "pill ok";
     $("db").textContent = h.db;
+    $("restart").disabled = Boolean(restartPending);
+    if (restartPending && h.instance_id && h.instance_id !== restartPending) {
+      finishRestart("服务已重启");
+      refresh("overview");
+    }
   } catch (e) {
     $("health").textContent = "daemon 不可达";
     $("health").className = "pill bad";
+    $("restart").disabled = true;
   }
 }
+
+$("restart").onclick = () => $("restart-modal").classList.add("on");
+$("restart-cancel").onclick = () => $("restart-modal").classList.remove("on");
+document.querySelector("#restart-modal").addEventListener("click", (e) => {
+  if (e.target.id === "restart-modal") e.currentTarget.classList.remove("on");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("restart-modal").classList.remove("on");
+});
+
+$("restart-ok").onclick = async () => {
+  $("restart-modal").classList.remove("on");
+  if (restartPending) return;
+  const btn = $("restart");
+  btn.disabled = true;
+  setRestartStatus("正在请求重启…");
+  try {
+    const h = await api("/api/health");
+    if (!h.instance_id) throw new Error("这个 daemon 不提供重启（没有 instance_id）");
+    restartPending = h.instance_id;
+    await api("/api/restart", {});
+    setRestartStatus("正在等待服务重启…");
+  } catch (e) {
+    const text = String(e.message || e);
+    if (/unavailable|unsupported|503/i.test(text)) {
+      finishRestart(text);
+      return;
+    }
+    // 连接被掐断也可能是重启已经开始了，继续等 health。
+    setRestartStatus("重启请求未完成，请检查服务状态。" + (text ? " " + text : ""));
+  }
+  if (!restartPending) return;
+  restartTimer = setTimeout(() => {
+    if (!restartPending) return;
+    finishRestart("暂未确认服务重启，请检查服务状态。");
+  }, 120000);
+};
 
 /* The pause switch: stops the running pass and every future one (persisted in the db) until
    pressed again. The schedule itself is configured on the 调度 tab. */

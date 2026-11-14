@@ -52,7 +52,8 @@ const STATUS = {
 }
 
 const PAYLOAD = {
-  '/api/health': { status: 'ok', pid: 873078, schema: 9, db: '/home/wacky_ju2/.hermes/eventmem/events.db' },
+  '/api/health': { status: 'ok', pid: 873078, schema: 9, instance_id: 'inst-1',
+                   db: '/home/wacky_ju2/.hermes/eventmem/events.db' },
   '/api/i18n': { lang: 'zh', map: {} },
   '/api/config': { effective: { edges: edgesConfig, decision: { backends: ['startlux', 'win-autothink'] } },
                    file: '/home/wacky_ju2/.hermes/eventmem/settings.yaml', overrides: { edges: {} }, writable: true },
@@ -63,10 +64,19 @@ const PAYLOAD = {
   '/api/job': { job: null },
   '/api/stats': null
 }
+window.__payload = PAYLOAD
 
 const ctx = {
   rest: (path, opts) => {
     calls += 1
+    if (path === '/api/restart') {
+      ;(window.__posts = window.__posts || []).push({ path, body: (opts && opts.body) || {} })
+      // A real daemon re-execs and comes back with a new instance id; health polls keep
+      // returning the old one until then. 1.2 s is enough for the harness to observe the
+      // pending state before the poll flips it to "restarted".
+      setTimeout(() => { PAYLOAD['/api/health'].instance_id = 'inst-2' }, 1200)
+      return Promise.resolve({ ok: true, restarting: true, instance_id: PAYLOAD['/api/health'].instance_id })
+    }
     if (path === '/api/stats') {
       if (live) {
         // Every poll looks like the pass answered another pair and wrote an edge.

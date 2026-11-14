@@ -19,6 +19,8 @@
   </nav>
   <div class="spacer"></div>
   <span class="pill" id="health">连接中…</span>
+  <span class="hint" style="margin:0;display:none" id="restart-status" role="status" aria-live="polite"></span>
+  <button class="btn" id="restart">重启服务</button>
   <button class="btn danger" id="pause-toggle" data-paused="0" title="暂停后不再自动开新一轮，直到点继续">暂停全部判断</button>
 </header>
 
@@ -212,6 +214,17 @@
 </main>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal-backdrop" id="restart-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="重启服务">
+    <p>重启 eventmem 服务？服务将短暂不可用，正在进行的任务会先结束。</p>
+    <div class="acts">
+      <button class="btn" id="restart-cancel" autofocus>取消</button>
+      <button class="btn danger" id="restart-ok">重启服务</button>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

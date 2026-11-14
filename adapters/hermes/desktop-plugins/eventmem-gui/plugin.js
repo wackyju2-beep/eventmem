@@ -61,6 +61,16 @@ const CSS = `
   color:var(--ui-text-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}
 .emg-pill.ok{color:var(--ui-green);border-color:var(--ui-green)}
 .emg-pill.bad{color:var(--ui-red);border-color:var(--ui-red)}
+/* 重启按钮与状态放在 ok/schema/pid 胶囊下方，右对齐：状态一行最多两行，不挤 tabs。 */
+.emg-head-side{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+.emg-head-row{display:flex;align-items:center;gap:8px}
+.emg-restart-status{max-width:300px;text-align:right;color:var(--ui-text-tertiary);font-size:11px;line-height:1.4}
+.emg-modal-backdrop{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;
+  padding:24px;background:color-mix(in srgb,#000 32%,transparent)}
+.emg-modal{width:min(420px,100%);box-sizing:border-box;border-radius:10px;padding:16px 18px;
+  background:var(--ui-bg-elevated);border:1px solid var(--ui-stroke-secondary);box-shadow:0 18px 40px #0006}
+.emg-modal p{margin:0 0 14px;font-size:12.5px;line-height:1.6;white-space:pre-wrap}
+.emg-modal .acts{display:flex;justify-content:flex-end;gap:8px}
 .emg-live{display:flex;align-items:center;gap:9px;padding:7px 16px;font-size:11.5px;
   border-bottom:1px solid var(--ui-stroke-secondary);
   background:color-mix(in srgb,var(--ui-accent) 5%,transparent)}
@@ -1780,6 +1790,10 @@ function Console({ ctx }) {
   const i18n = useFetch(ctx, '/api/i18n')
   const dark = useDarkTheme()
   const noteTimer = useRef(0)
+  const [restartState, setRestartState] = useState('')
+  const [restartPending, setRestartPending] = useState(false)
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const restartRef = useRef(null)
 
   // Module-level on purpose (see the i18n block): every child render happens after this
   // line, and `t()` is also called from module-scope tables. One assignment is enough.
@@ -1816,6 +1830,51 @@ function Console({ ctx }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  // 重启后 instance_id 会变：这是唯一可靠的「服务真的换了」判据（pid 可能被 systemd
+  // 复用，ok 也不代表是新进程）。pending 期间继续 5 s 轮询 health，变了就收工。
+  useEffect(() => {
+    const pending = restartRef.current
+    const instance = health.data && health.data.instance_id
+    if (!pending || !instance || instance === pending.instanceId) return
+    restartRef.current = null
+    setRestartPending(false)
+    setRestartState(t('服务已重启'))
+  }, [health.data && health.data.instance_id])
+
+  useEffect(() => () => { restartRef.current = null }, [])
+
+  const requestRestart = async () => {
+    setConfirmRestart(false)
+    if (restartPending || !health.data || !health.data.instance_id) return
+    const pending = { instanceId: health.data.instance_id }
+    restartRef.current = pending
+    setRestartPending(true)
+    setRestartState(t('正在请求重启…'))
+    try {
+      await ctx.rest('/api/restart', { method: 'POST', body: {} })
+      if (restartRef.current === pending) setRestartState(t('正在等待服务重启…'))
+    } catch (error) {
+      if (restartRef.current !== pending) return
+      const text = msg(error)
+      // 服务端明确拒绝（例如当前托管方式不支持重启）：不会再有新的 instance，直接收工。
+      if (/unavailable|unsupported|503/i.test(text)) {
+        restartRef.current = null
+        setRestartPending(false)
+        setRestartState(text)
+        return
+      }
+      // 连接被掐断也可能是重启已经开始了，继续等 health。
+      setRestartState(t('重启请求未完成，请检查服务状态。') + ' ' + text)
+    }
+    if (restartRef.current !== pending) return
+    window.setTimeout(() => {
+      if (restartRef.current !== pending) return
+      restartRef.current = null
+      setRestartPending(false)
+      setRestartState(t('暂未确认服务重启，请检查服务状态。'))
+    }, 120000)
   }
 
   const healthy = Boolean(health.data) && !health.error
@@ -1856,9 +1915,29 @@ function Console({ ctx }) {
               )
             )
           }),
-          jsx('span', {
-            className: `emg-pill ${healthy ? 'ok' : 'bad'}`,
-            children: healthy ? `ok · schema ${NI(health.data.schema)} · pid ${NI(health.data.pid)}` : t('daemon 不可达')
+          jsxs('div', {
+            className: 'emg-head-side',
+            children: [
+              jsxs('div', {
+                className: 'emg-head-row',
+                children: [
+                  jsx('span', {
+                    className: `emg-pill ${healthy ? 'ok' : 'bad'}`,
+                    children: healthy
+                      ? `ok · schema ${NI(health.data.schema)} · pid ${NI(health.data.pid)}`
+                      : t('daemon 不可达')
+                  }),
+                  jsx(Btn, {
+                    disabled: !healthy || !health.data.instance_id || restartPending,
+                    onClick: () => setConfirmRestart(true),
+                    children: t('重启服务')
+                  })
+                ]
+              }),
+              restartState
+                ? jsx('div', { className: 'emg-restart-status', role: 'status', 'aria-live': 'polite', children: restartState })
+                : null
+            ]
           })
         ]
       }),
@@ -1878,7 +1957,44 @@ function Console({ ctx }) {
                   : tab === 'logs'
                     ? jsx(Logs, { ctx })
                     : jsx(GraphTab, { notify })
-      })
+      }),
+      confirmRestart
+        ? jsx('div', {
+            className: 'emg-modal-backdrop',
+            onClick: () => setConfirmRestart(false),
+            children: jsxs('div', {
+              className: 'emg-modal',
+              role: 'dialog',
+              'aria-modal': true,
+              'aria-label': t('重启服务'),
+              onClick: event => event.stopPropagation(),
+              onKeyDown: event => {
+                if (event.key === 'Escape') setConfirmRestart(false)
+              },
+              children: [
+                jsx('p', { children: t('重启 eventmem 服务？服务将短暂不可用，正在进行的任务会先结束。') }),
+                jsxs('div', {
+                  className: 'acts',
+                  children: [
+                    jsx('button', {
+                      type: 'button',
+                      className: 'emg-b',
+                      autoFocus: true,
+                      onClick: () => setConfirmRestart(false),
+                      children: t('取消')
+                    }),
+                    jsx('button', {
+                      type: 'button',
+                      className: 'emg-b danger',
+                      onClick: requestRestart,
+                      children: t('重启服务')
+                    })
+                  ]
+                })
+              ]
+            })
+          })
+        : null
     ]
   })
 }

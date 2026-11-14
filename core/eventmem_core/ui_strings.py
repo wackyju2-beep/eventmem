@@ -25,6 +25,17 @@ EN: dict[str, str] = {
     "跑一轮": "Run a pass",
     "跑着…": "Running…",
     "daemon 不可达": "daemon unreachable",
+    # ---- 重启服务（daemon /api/restart） --------------------------------
+    "重启服务": "Restart service",
+    "重启 eventmem 服务？服务将短暂不可用，正在进行的任务会先结束。":
+        "Restart the eventmem service? It will be briefly unavailable while ongoing work "
+        "finishes first.",
+    "正在请求重启…": "Requesting restart…",
+    "正在等待服务重启…": "Waiting for the service to restart…",
+    "服务已重启": "Service restarted",
+    "暂未确认服务重启，请检查服务状态。": "Restart not confirmed yet. Check the service status.",
+    "重启请求未完成，请检查服务状态。": "Restart request did not complete. Check the service status.",
+    "取消": "Cancel",
     "载入中…": "Loading…",
     "eventmem 记忆后台（概览 / 后端 / 模型 / 调度 / 日志 / 图谱）":
         "eventmem console (overview / backends / models / schedule / logs / graph)",

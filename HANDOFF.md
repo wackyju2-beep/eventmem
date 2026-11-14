@@ -246,8 +246,10 @@ tar czf - --exclude=.git --exclude=__pycache__ . | \
   现在边画在两块 canvas 上（底层在卡片下、前层放选中边和标签），按 `(颜色, 透明度, 线宽)`
   合并成 Path2D 一次 `stroke()`，同场景 **59.7 fps（中位 16.7ms，p95 16.7ms）**。
   边的点击本来就是舞台上的几何命中测试，不依赖 DOM，所以交互没退。
-- **LOD 按缩放而不是按深度：** `cam.dist / cam.fit > 1.15` 每两条画一条，`> 1.9` 每四条画一条，
-  同时抬高透明度下限、线宽最小 1px —— 缩远看到的是稀疏网而不是一堆亚像素雾。
+- **LOD 按屏幕上的边数而不是缩放：** 每帧统计真正在画面里的边（`edgeLoadRef`，30% 平滑），
+  >1400 条每两条画一条、>2400 条每三条；灰色「判过、无关系」的边再稀疏一倍（最多 8 取 1）。
+  按缩放切会在开场（相机在云团里、视距算“近”）就画满 5k 条；缩远时也不会再把边全砍光。
+  同时抬高透明度下限、线宽最小 1px；前层 canvas 没有选中/标签时根本不准备（省一次全屏清空）。
 - **人工改过的边**原来是 SVG 的 `linearGradient`，canvas 里换成纯色 `#c58bff`。
 - **概览两栏等高：** `.emg-card + .emg-card{margin-top:12px}` 在 grid 里会把第二张卡压矮 12px
   且下移 12px（复现：top 26 vs 14、height 225 vs 237）。`.emg-grid` 现在 `align-items:stretch`
@@ -306,4 +308,25 @@ tar czf - --exclude=.git --exclude=__pycache__ . | \
 （无选中时命中表为 0、有选中时只含相连边、点边出关系检查器、悬停给 pointer）、
 `__panelPolicy()`（第一下只关框、第二下才选中）。`__emEdgeHits()` / `__emRingLayers()`
 是调试口，只在 `window.__EM_GRAPH_DEBUG` 下挂。
+
+## Hermes 侧同步 dsh 的两项（2026-11-15）
+
+dsh 那边做出来的东西现在也回到 Hermes（`adapters/hermes`），两套 UI 行为一致：
+
+- **重启服务按钮**：桌面「记忆后台」标题栏右侧，ok/schema/pid 胶囊下方。确认框 → `POST /api/restart`；
+  pending 期间按钮禁用、状态行依次是「正在请求重启… / 正在等待服务重启…」；**判「重启完成」只看
+  `/api/health.instance_id` 变了没有**（pid 会被 systemd 复用，ok 不代表新进程），120 s 没变则报未确认。
+  浏览器版（`core/eventmem_core/ui`）头部同一颗按钮，逻辑相同；daemon 在非 `run.py daemon`
+  形态（嵌入式解释器）下会回 503，界面会把这句话显示出来。
+- **图谱性能与点选**：`eventmem-graph/plugin.js` 同步了 dsh 的渲染优化——每个原子一份写入缓存
+  （display/opacity/transform/zIndex/dataset 只在真变时写）、相机静止时 30fps 且跳过 morph 段、
+  卡片固定 172×54 布局用 `--sc` 整体缩放（文字跟着缩而不是被裁）、只在卡片真出现时提层、
+  canvas DPR 上限 1.25、边按屏上条数稀疏、边命中表只在选中原子后存在；点选规则与 dsh 相同
+  （邻域一次点中、平常边不可点、筛选面板第一下只关框）。
+- **验收**：Mint 上 `tests/test_restart.py` 4/4（含真进程 re-exec）、`tests/test_ui.py` 24/24、
+  `tests/test_daemon.py` 20/20，`tools/plugin-smoke/run.sh` 全绿（含英文页无中文），
+  `tools/plugin-smoke/bench` 在 559 原子 / 4122 场景边（224 关系边 + 4000 判过对）上 60 fps、无 JS 错误；
+  真实 daemon（临时库 :9131）点了重启后 pid 不变、instance_id 变了、页面显示「服务已重启」。
+  重启按钮的桌面端行为用 `tools/plugin-smoke/harness` + `?page=overview` 验（假 ctx 会在 1.2 s 后翻转
+  instance_id，状态应从「正在等待…」变成「服务已重启」）。
 
