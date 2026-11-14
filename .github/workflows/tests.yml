@@ -35,3 +35,45 @@ jobs:
             echo "== $t"
             python3 "$t"
           done
+      - name: reproducible benchmark smoke
+        run: python3 benchmarks/run.py --json > /tmp/eventmem-bench.json
+
+  # The adapter is JavaScript and the daemon is Python. Run the JS contract/integration
+  # tests on both host platforms; DSH itself runs on Windows and Linux/macOS.
+  adapter:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: adapter contract (defaults, identity, token, setup)
+        run: node tests/test_dsh_adapter.mjs
+      - name: adapter host integration (real HTTP stub)
+        run: node tests/test_dsh_host.mjs
+      - name: syntax check
+        run: |
+          node --check adapters/dsh/index.js
+          node --check adapters/dsh/client.js
+          node --check adapters/dsh/lib/config.js
+          node --check adapters/dsh/lib/net.js
+          node --check adapters/dsh/lib/setup.js
+          node --check adapters/dsh/lib/console.js
+
+  # Windows-only packaging guard: the installer must keep the daemon on loopback, carry a
+  # token when asked, and still tell the user that the DSH bundle is a separate install.
+  windows-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install contract
+        run: python tests/test_install_contract.py
+      - name: adapter metadata parses as JSON
+        run: python -c "import json; json.load(open('adapters/dsh/package.json', encoding='utf-8'))"

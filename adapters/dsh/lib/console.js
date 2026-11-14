@@ -7,10 +7,12 @@
  * daemon over the same tunnel the adapter already owns. No CORS, no second token, and the
  * daemon's loopback stays on the Mint box.
  *
- * The allow-list is deliberate. This route is reachable from any owner browser session, so
- * it exposes exactly the console's own routes — never a generic "fetch anything on the
- * daemon" door.
+ * `setup` is the one route answered here instead of forwarded: it reports the adapter and
+ * daemon state, tests a candidate endpoint, and writes the connection fields through the
+ * profile's config editor. The allow-list below never contains it.
  */
+
+import { saveSetup, setupSnapshot, testDraft } from './setup.js'
 
 /** GET routes the console page actually calls. */
 const GET_ROUTES = [
@@ -80,6 +82,15 @@ function json(status, body) {
   })
 }
 
+/** Read one JSON body; `null` means the body was not valid JSON. */
+async function readJson(request) {
+  try {
+    return await request.json()
+  } catch {
+    return null
+  }
+}
+
 /** Whether a route may be proxied on the given method. */
 function allowed(method, route) {
   if (!cleanRoute(route)) return false
@@ -110,6 +121,22 @@ export function registerConsole(ctx, cfg, net) {
       fetch: async (request) => {
         const url = new URL(request.url)
         const route = String(url.searchParams.get('path') || '').replace(/^\/+/, '')
+        // Local routes first: they are answered by the adapter and never forwarded.
+        if (route === 'setup' && request.method === 'GET') {
+          const health = await net.health({ timeoutMs: 6000 })
+          return json(200, setupSnapshot({ cfg, net, health }))
+        }
+        if (route === 'setup/test' && request.method === 'POST') {
+          const body = await readJson(request)
+          if (body === null) return json(400, { error: 'body is not JSON' })
+          return json(200, await testDraft(body))
+        }
+        if (route === 'setup/save' && request.method === 'POST') {
+          const body = await readJson(request)
+          if (body === null) return json(400, { error: 'body is not JSON' })
+          const result = await saveSetup(ctx, body)
+          return json(Number(result.status) || 200, result)
+        }
         if (!route || !allowed(request.method, route)) {
           return json(404, { error: 'not found' })
         }

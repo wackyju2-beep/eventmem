@@ -6,9 +6,9 @@ loop plus three things a worker could not have:
 * **supervision** — for every ``self`` pack listed in ``decision.backends`` it starts the
   process before a pass that has work to do (and never while idle, so an unused model
   costs nothing);
-* **a management API** — ``127.0.0.1:9123`` by default, JSON, no auth, because it is bound
-  to loopback and the alternative (a socket protocol) is more moving parts for the same
-  result;
+* **a management API** — ``127.0.0.1:9123`` by default, JSON, optionally bearer-token
+  protected. Loopback without a token is the local trust boundary; binding a non-loopback
+  address requires a token, because the same port exposes event edits and backend control;
 * **the GUI** — a small static page served from the same port and nothing else.  It is a
   thin client of exactly these routes, so anything the page can do, ``curl`` can do.
 
@@ -20,7 +20,7 @@ another machine — the database file itself never leaves this box.
 Routes::
 
     GET  /                           the GUI (static; /ui/* for its assets)
-    GET  /api/health                 liveness + db + backend names
+    GET  /api/health                 identity + schema (minimal when unauthenticated)
     GET  /api/status                 health + cursor lag + last passes
     GET  /api/stats                  event/edge/pair counts, kinds, projects
     GET  /api/config                 effective settings + the file they came from
@@ -65,6 +65,9 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import hashlib
+import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -115,13 +118,52 @@ def _rendered_count(block: str) -> int:
     return sum(1 for line in block.splitlines() if re.search(r"#\d+", line))
 
 __all__ = ["Daemon", "make_server", "acquire_lock", "serve", "main", "API_PORT", "UI_DIR",
-           "NO_GUARD"]
+           "NO_GUARD", "API_VERSION", "SERVICE_ID", "db_identity", "is_loopback_host",
+           "read_token_file"]
 
 #: Loopback only.  The GUI and the CLI are local by construction.
 API_PORT = 9123
 
 #: Static page served at ``/``; lives next to this module so a pip install ships it.
 UI_DIR = Path(__file__).resolve().parent / "ui"
+
+#: Data-plane protocol version reported by ``/api/health``. Adapters refuse an endpoint
+#: that does not name itself and speak this version — "HTTP 200 with JSON" is not identity.
+API_VERSION = 1
+SERVICE_ID = "eventmem-daemon"
+
+
+def db_identity(path: str) -> str:
+    """Stable id for one database **location**, not its contents.
+
+    The adapter can require this id, so a daemon on the expected port that happens to own a
+    different ``events.db`` is rejected before the first write. Path is normalised and
+    resolved; the first 16 hex characters are enough to tell local databases apart.
+    """
+    try:
+        resolved = os.path.realpath(os.path.expanduser(str(path)))
+    except (OSError, ValueError):
+        resolved = str(path)
+    if os.name == "nt":
+        resolved = resolved.lower()
+    return hashlib.sha256(resolved.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def is_loopback_host(host: str) -> bool:
+    """Whether a bind address is loopback (``localhost`` included)."""
+    value = str(host or "").strip().strip("[]")
+    if value.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def read_token_file(path: str) -> str:
+    """Read a token file, stripping trailing whitespace and a UTF-8 BOM."""
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        return handle.read().strip()
 
 
 class Daemon:
@@ -130,13 +172,16 @@ class Daemon:
     costs ~1.3 s and a remote host recalls every turn."""
 
     def __init__(self, settings: CoreSettings, *, packs_root: str = "",
-                 settings_store: Optional[Any] = None):
+                 settings_store: Optional[Any] = None, api_token: str = ""):
         #: *settings_store* is the adapter's ``~/.hermes/eventmem/settings.yaml`` handle: an
         #: object with ``path``, ``read() -> dict`` and ``write(mapping) -> CoreSettings``.
         #: ``None`` (tests, ``--once``) makes ``POST /api/config`` answer 501 rather than
         #: pretend it saved something.
         self.settings_store = settings_store
         self.settings = settings
+        #: When non-empty every API route except the (minimal) health probe requires
+        #: ``Authorization: Bearer <token>``. Empty means loopback trust only.
+        self.api_token = str(api_token or "").strip()
         self.packs_root = str(packs_root or getattr(settings.decision, "packs_dir", "") or "")
         self.started = time.time()
         self.instance_id = uuid.uuid4().hex
@@ -416,18 +461,47 @@ class Daemon:
 
     # ------------------------------------------------------------------ views
 
-    def health(self) -> dict[str, Any]:
-        return {
+    def _capabilities(self) -> dict[str, Any]:
+        """Cheap feature probes for the setup page (no model load, no network)."""
+        now = time.time()
+        cached = getattr(self, "_caps_cache", None)
+        if cached and now - cached[0] < 30:
+            return cached[1]
+        try:
+            from .embed import Encoder
+
+            embedding = bool(Encoder(self.settings.models_root or None).available())
+        except Exception:  # noqa: BLE001 - a broken optional runtime is just "off"
+            embedding = False
+        decision = bool(getattr(self.settings.decision, "backends", ())
+                        or getattr(self.settings.decision, "url", ""))
+        value = {"embedding": embedding, "decision": decision}
+        self._caps_cache = (now, value)
+        return value
+
+    def health(self, *, authorized: bool = True) -> dict[str, Any]:
+        body: dict[str, Any] = {
             "status": "ok",
-            "pid": os.getpid(),
-            "instance_id": self.instance_id,
-            "db": self.settings.db_path,
+            "service": SERVICE_ID,
+            "api": API_VERSION,
             "schema": SCHEMA_VERSION,
+            "instance_id": self.instance_id,
+            "db_id": db_identity(self.settings.db_path),
             "uptime": round(time.time() - self.started, 1),
-            "packs_dir": self.packs_root,
-            "backends": [p.name for p in self.packs()],
-            "paused": self._paused,
+            "auth": "token" if self.api_token else "none",
+            "capabilities": self._capabilities(),
         }
+        if authorized:
+            # Paths, PIDs and pack names are for the local operator. A remote caller that
+            # has not presented the token gets identity only.
+            body.update({
+                "pid": os.getpid(),
+                "db": self.settings.db_path,
+                "packs_dir": self.packs_root,
+                "backends": [p.name for p in self.packs()],
+                "paused": self._paused,
+            })
+        return body
 
     def backend_status(self, pack: Pack) -> dict[str, Any]:
         base: dict[str, Any] = {
@@ -1348,7 +1422,7 @@ class Daemon:
     # ------------------------------------------------------------------ routing
 
     def route(self, method: str, parts: list[str],
-              body: Any = None) -> tuple[int, dict[str, Any]]:
+              body: Any = None, *, authorized: bool = True) -> tuple[int, dict[str, Any]]:
         if not parts or parts[0] != "api":
             return 404, {"error": "not found"}
         tail = parts[1:]
@@ -1365,7 +1439,7 @@ class Daemon:
                 self._restart_requested.set()
             return 202, {"ok": True, "restarting": True, "instance_id": self.instance_id}
         if method == "GET" and tail == ["health"]:
-            return 200, self.health()
+            return 200, self.health(authorized=authorized)
         if method == "GET" and tail == ["status"]:
             return 200, self.status()
         if method == "GET" and tail == ["stats"]:
@@ -1491,6 +1565,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(raw)
 
@@ -1510,6 +1586,30 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return json.loads(raw.decode("utf-8"))
 
+    def _authorized(self) -> bool:
+        """Constant-time bearer check; an unset token keeps loopback-only behaviour."""
+        token = self.daemon.api_token
+        if not token:
+            return True
+        header = str(self.headers.get("Authorization") or "")
+        return hmac.compare_digest(header, "Bearer " + token)
+
+    def _same_origin(self) -> bool:
+        """Reject a browser POST from another site (CSRF), while allowing non-browser clients.
+
+        The console and the Hermes/DSH proxies talk server-to-server and send no Origin; a
+        local browser page sends its own origin; a malicious site sends a different one.
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            parsed = urlsplit(origin)
+        except ValueError:
+            return False
+        host = str(self.headers.get("Host") or "").lower()
+        return parsed.scheme in ("http", "https") and parsed.netloc.lower() == host
+
     def _dispatch(self, method: str) -> None:
         path = urlsplit(self.path).path
         if method == "GET" and not path.startswith("/api/"):
@@ -1517,13 +1617,15 @@ class _Handler(BaseHTTPRequestHandler):
 
         parts = [part for part in path.split("/") if part]
         is_restart = parts == ["api", "restart"]
-        # A browser on another site must not be able to restart a loopback service via a
-        # simple cross-origin form POST. Non-browser clients and trusted local proxies omit Origin.
-        if method == "POST" and is_restart:
-            origin = self.headers.get("Origin")
-            if origin and (urlsplit(origin).scheme not in ("http", "https") or
-                           urlsplit(origin).netloc.lower() != self.headers.get("Host", "").lower()):
-                return self._send_json(403, {"error": "cross-origin restart forbidden"})
+        # A browser on another site must not be able to drive a loopback service through a
+        # simple cross-origin form POST. Applies to every API write, not only restart.
+        if method == "POST" and not self._same_origin():
+            return self._send_json(403, {"error": "cross-origin request forbidden"})
+        authorized = self._authorized()
+        # Health is the only unauthenticated route, and an unauthenticated caller gets the
+        # identity fields only (no db path, pid, or pack names).
+        if path.startswith("/api/") and path != "/api/health" and not authorized:
+            return self._send_json(401, {"error": "missing or invalid API token"})
         try:
             body = self._read_body() if method in ("POST", "PUT") else None
         except (ValueError, UnicodeDecodeError):
@@ -1533,7 +1635,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self.daemon._restart_requested.is_set() and not is_restart:
                 status, payload = 503, {"error": "restart in progress"}
             else:
-                status, payload = self.daemon.route(method, parts, body)
+                status, payload = self.daemon.route(method, parts, body, authorized=authorized)
         except Exception as exc:  # noqa: BLE001 - never leak a traceback to the client
             status, payload = 500, {"error": f"{type(exc).__name__}: {exc}"}
         try:
@@ -1629,7 +1731,8 @@ def serve(daemon: Daemon, *, host: str = "127.0.0.1", port: int = API_PORT,
     server = make_server(daemon, host, port)
     thread = threading.Thread(target=server.serve_forever, name="eventmem-api", daemon=True)
     thread.start()
-    _log.info("eventmem daemon: api on http://%s:%s  (GUI at /)", host, server.server_address[1])
+    _log.info("eventmem daemon: api on http://%s:%s  (GUI at /, auth=%s)",
+              host, server.server_address[1], "token" if daemon.api_token else "none")
     try:
         daemon.loop(poll=poll)
     finally:
@@ -1651,6 +1754,10 @@ def main(argv: Optional[list[str]] = None, *, settings: Optional[CoreSettings] =
     parser.add_argument("--port", type=int,
                         default=int(os.environ.get("EVENTMEM_DAEMON_PORT", API_PORT)))
     parser.add_argument("--poll", type=float, default=st.edges.poll_seconds)
+    parser.add_argument("--token", default=os.environ.get("EVENTMEM_DAEMON_TOKEN", ""),
+                        help="require Bearer auth on every API route except /api/health")
+    parser.add_argument("--token-file", default=os.environ.get("EVENTMEM_DAEMON_TOKEN_FILE", ""),
+                        help="read the API token from this file (preferred over --token)")
     parser.add_argument("--once", action="store_true", help="跑一轮就退出（调试用）")
     parser.add_argument("--print-settings", action="store_true")
     args = parser.parse_args(argv)
@@ -1658,6 +1765,17 @@ def main(argv: Optional[list[str]] = None, *, settings: Optional[CoreSettings] =
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from dataclasses import replace
+
+    token = str(args.token or "").strip()
+    if args.token_file:
+        try:
+            token = read_token_file(args.token_file)
+        except OSError as exc:
+            parser.error(f"cannot read --token-file {args.token_file}: {exc}")
+    # Binding off loopback without a token would expose event edits and backend control to
+    # the network. Refuse instead of printing a warning nobody reads.
+    if not is_loopback_host(args.host) and not token:
+        parser.error("binding a non-loopback address requires --token or --token-file")
 
     if args.db:
         st = replace(st, db_path=os.path.expanduser(args.db))
@@ -1668,7 +1786,7 @@ def main(argv: Optional[list[str]] = None, *, settings: Optional[CoreSettings] =
     if not st.db_path:
         parser.error("--db is required (db_path is empty and $EVENTMEM_DB is unset)")
 
-    daemon = Daemon(st, settings_store=settings_store)
+    daemon = Daemon(st, settings_store=settings_store, api_token=token)
     if args.once:
         print(json.dumps(daemon.run_pass(), ensure_ascii=False, default=str))
         return 0

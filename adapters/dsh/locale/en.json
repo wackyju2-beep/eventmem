@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "eventmem memory",
-    "description": "Shared event memory with recall, seven tools, turn-end extraction and the memory console under Plugins in the sidebar. This bundle is only a client: install and start the eventmem daemon separately. Its API and console have no built-in authentication; keep them private. Extraction can make an additional host-model request. If the daemon is unreachable, automatic memory is skipped rather than blocking the turn.",
+    "description": "Local-first event memory with recall, seven tools, turn-end extraction and the memory console under Plugins in the sidebar. This bundle is only a client: install and start the eventmem daemon separately. The default is a local daemon at 127.0.0.1 with no SSH; remote sharing is opt-in. The daemon can require a bearer token. Turn-end extraction sends a redacted excerpt to the host's configured model, which may be remote. If the daemon is unreachable, automatic memory is skipped rather than blocking the turn.",
     "detail": "docs/DETAIL.md"
   }
 }

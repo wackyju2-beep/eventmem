@@ -1,16 +1,17 @@
 # Mount the eventmem adapter when this package is installed as a DSH profile bundle.
-# The daemon stays on the Mint box; this row is a pure HTTP client over the SSH tunnel.
-# `tunnel: true` makes the plugin own that tunnel: it starts `ssh -N -L 9123:...` when the
-# adapter activates and stops it when the adapter is unloaded (disable/uninstall/reload).
-# An already-working tunnel (autossh, a manual ssh -N, a leftover) is adopted, not duplicated.
+#
+# The defaults are single-machine: an eventmem daemon on 127.0.0.1:9123 and no SSH.
+# Installing this bundle installs the DSH client only; the daemon (database, recall,
+# edge worker) is a separate install — see README.md, or open the plugin's 连接 page.
+#
+# Remote sharing is opt-in. Set `mode: remote` and `tunnelHost` to a working
+# passwordless SSH alias, or leave `mode: local` and point `baseUrl` at an existing
+# tunnel. There is deliberately no host name from the author's network here.
 - insert:
     - id: eventmem
       name: dsh-eventmem
       config:
+        mode: local
         baseUrl: http://127.0.0.1:9123
         agent: dsh
         lang: zh
-        tunnel: true
-        tunnelHost: mint
-        tunnelLocalPort: 9123
-        tunnelRemotePort: 9123

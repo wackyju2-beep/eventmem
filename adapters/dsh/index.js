@@ -14,10 +14,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 import { Net } from './lib/net.js'
+import { resolveConfig } from './lib/config.js'
 import { strings, OUR_SOURCE_KIND } from './lib/text.js'
 import { SessionBook } from './lib/state.js'
 import { makeSticky } from './lib/sticky.js'
@@ -34,68 +33,6 @@ export const name = 'eventmem'
 
 /** Services this plugin cannot work without; a profile lacking one keeps it inactive. */
 export const inject = ['tools', 'llm']
-
-const DEFAULTS = {
-  baseUrl: 'http://127.0.0.1:9123',
-  agent: 'dsh',
-  lang: 'zh',
-  timeoutMs: 8000,
-  recallTimeoutMs: 10000,
-  auxTimeoutMs: 60000,
-  auxMaxTokens: 800,
-  budgetTokens: 600,
-  maxEventsPerCall: 3,
-  prefetch: true,
-  extract: true,
-  reminder: true,
-  projectHint: true,
-  auxProvider: '',
-  auxModel: '',
-  logFile: join(tmpdir(), 'dsh-eventmem.log'),
-  tunnel: true,
-  tunnelHost: 'mint',
-  tunnelLocalPort: 9123,
-  tunnelRemotePort: 9123,
-  tunnelSsh: 'ssh',
-  tunnelArgs: [],
-  tunnelIntervalMs: 30000,
-}
-
-function positive(value, fallback) {
-  const n = Number(value)
-  return Number.isFinite(n) && n > 0 ? n : fallback
-}
-
-/** Validate the row's `config` by hand: the bundle cannot import schemastery. */
-function resolveConfig(raw) {
-  const input = raw && typeof raw === 'object' ? raw : {}
-  const cfg = {
-    baseUrl: typeof input.baseUrl === 'string' && input.baseUrl.trim() ? input.baseUrl.trim() : DEFAULTS.baseUrl,
-    agent: typeof input.agent === 'string' && input.agent.trim() ? input.agent.trim() : DEFAULTS.agent,
-    lang: typeof input.lang === 'string' ? input.lang : DEFAULTS.lang,
-    timeoutMs: positive(input.timeoutMs, DEFAULTS.timeoutMs),
-    recallTimeoutMs: positive(input.recallTimeoutMs, DEFAULTS.recallTimeoutMs),
-    auxTimeoutMs: positive(input.auxTimeoutMs, DEFAULTS.auxTimeoutMs),
-    auxMaxTokens: Math.floor(positive(input.auxMaxTokens, DEFAULTS.auxMaxTokens)),
-    budgetTokens: Math.floor(positive(input.budgetTokens, DEFAULTS.budgetTokens)),
-    maxEventsPerCall: Math.min(10, Math.max(1, Math.floor(positive(input.maxEventsPerCall, DEFAULTS.maxEventsPerCall)))),
-    prefetch: input.prefetch !== false,
-    extract: input.extract !== false,
-    reminder: input.reminder !== false,
-    projectHint: input.projectHint !== false,
-    auxProvider: typeof input.auxProvider === 'string' ? input.auxProvider : '',
-    auxModel: typeof input.auxModel === 'string' ? input.auxModel : '',
-    logFile: typeof input.logFile === 'string' ? input.logFile : DEFAULTS.logFile,
-    tunnel: input.tunnel !== false,
-    tunnelHost: typeof input.tunnelHost === 'string' ? input.tunnelHost.trim() : DEFAULTS.tunnelHost,
-    tunnelLocalPort: Math.floor(positive(input.tunnelLocalPort, DEFAULTS.tunnelLocalPort)),
-    tunnelRemotePort: Math.floor(positive(input.tunnelRemotePort, DEFAULTS.tunnelRemotePort)),
-    tunnelSsh: typeof input.tunnelSsh === 'string' && input.tunnelSsh.trim() ? input.tunnelSsh.trim() : DEFAULTS.tunnelSsh,
-    tunnelArgs: Array.isArray(input.tunnelArgs) ? input.tunnelArgs.map((value) => String(value)) : [],
-    tunnelIntervalMs: positive(input.tunnelIntervalMs, DEFAULTS.tunnelIntervalMs),
-  }
-  return cfg
-}
 
 /** `dsh:<session id>` — the prefix belongs to exactly one place. */
 function tagSession(cfg, raw) {
@@ -206,12 +143,20 @@ function turnExcerpt(agent, turn) {
 /**
  * Mount the adapter.
  * @param {any} ctx Cordis context of the bundle row.
- * @param {{baseUrl?: string, agent?: string, lang?: string, prefetch?: boolean}} [rawConfig]
+ * @param {{baseUrl?: string, agent?: string, lang?: string, prefetch?: boolean,
+ *          mode?: 'local'|'remote', tunnelHost?: string, tokenFile?: string}} [rawConfig]
  */
 export function apply(ctx, rawConfig) {
   const cfg = resolveConfig(rawConfig)
   const t = strings(cfg.lang)
-  const net = new Net({ baseUrl: cfg.baseUrl, timeoutMs: cfg.timeoutMs, logger: ctx.logger })
+  const net = new Net({
+    baseUrl: cfg.baseUrl,
+    token: cfg.token,
+    tokenFile: cfg.tokenFile,
+    expectDbId: cfg.expectDbId,
+    timeoutMs: cfg.timeoutMs,
+    logger: ctx.logger,
+  })
   const book = new SessionBook()
   const projects = makeProjectCache(net, cfg)
   /** @type {Map<string, any>} */
@@ -231,7 +176,9 @@ export function apply(ctx, rawConfig) {
   // already-working tunnel is adopted instead of duplicated.
 
   let tunnel = null
-  if (cfg.tunnel) {
+  if (cfg.tunnel && !cfg.tunnelHost) {
+    warn('remote mode is enabled but tunnelHost is empty; no SSH tunnel will be started')
+  } else if (cfg.tunnel) {
     tunnel = new TunnelSupervisor({
       cfg,
       probe: () => net.health({ timeoutMs: 2500 }),
@@ -240,6 +187,7 @@ export function apply(ctx, rawConfig) {
     ctx.effect(() => () => tunnel.stop())
     tunnel.start()
   }
+  if (net.tokenError) warn(net.tokenError)
 
   /** The live Agent for a session, including agents that predate a plugin reload. */
   function agentFor(raw) {
@@ -452,12 +400,16 @@ export function apply(ctx, rawConfig) {
 
   net.health().then((health) => {
     if (!health) {
-      if (cfg.tunnel) debug(`data plane not up yet at ${cfg.baseUrl}; the tunnel supervisor owns bringing it up`)
-      else warn(`data plane unreachable at ${cfg.baseUrl} (tunnel down or daemon stopped); memory degrades silently`)
+      if (net.identityError) warn(`refusing to use ${cfg.baseUrl}: ${net.identityError}`)
+      else if (cfg.tunnel && cfg.tunnelHost) debug(`data plane not up yet at ${cfg.baseUrl}; the tunnel supervisor owns bringing it up`)
+      else warn(`data plane unreachable at ${cfg.baseUrl} (${net.lastHealthError || 'no answer'}); memory degrades silently`)
       return
     }
     if (Number(health.schema) !== 12) {
       warn(`daemon reports schema ${String(health.schema)}, expected 12 (old daemon code?)`)
+    }
+    if (health.auth === 'token' && !net.token) {
+      warn('daemon requires an API token but none is configured; set tokenFile in the adapter configuration')
     }
     projects.get().catch((error) => {
       debug(`project vocabulary warm-up failed (${error && error.message ? error.message : error})`)

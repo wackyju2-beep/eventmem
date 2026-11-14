@@ -22,9 +22,24 @@ from urllib.request import pathname2url
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def http_json(url: str, timeout: float = 3.0) -> dict:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+def http_json(url: str, timeout: float = 3.0, token: str = "") -> dict:
+    request = urllib.request.Request(url, headers={})
+    if token:
+        request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def read_token(token: str, token_file: str) -> str:
+    if token.strip():
+        return token.strip()
+    if token_file:
+        try:
+            with open(token_file, "r", encoding="utf-8-sig") as handle:
+                return handle.read().strip()
+        except OSError:
+            return ""
+    return ""
 
 
 def local_db(path: str) -> dict:
@@ -63,23 +78,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Report what this eventmem install can do.")
     parser.add_argument("--url", default=os.environ.get("EVENTMEM_URL", "http://127.0.0.1:9123"))
     parser.add_argument("--db", default="")
+    parser.add_argument("--token", default=os.environ.get("EVENTMEM_DAEMON_TOKEN", ""))
+    parser.add_argument("--token-file", default=os.environ.get("EVENTMEM_DAEMON_TOKEN_FILE", ""))
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     url = args.url.rstrip("/")
+    token = read_token(args.token, args.token_file)
     report: dict = {"url": url, "daemon": False, "db": args.db, "backends": []}
 
     try:
-        health = http_json(url + "/api/health")
+        health = http_json(url + "/api/health", token=token)
         report["daemon"] = health.get("status") == "ok"
+        report["service"] = health.get("service") or ""
+        report["api"] = health.get("api")
+        report["instance_id"] = health.get("instance_id") or ""
+        report["db_id"] = health.get("db_id") or ""
+        report["auth"] = health.get("auth") or "none"
         report["db"] = health.get("db") or args.db
         report["schema"] = health.get("schema")
         report["uptime"] = health.get("uptime")
         report["backends"] = list(health.get("backends") or [])
-        stats = http_json(url + "/api/stats")
+        stats = http_json(url + "/api/stats", token=token)
         report["events"] = stats.get("events")
         report["edges"] = stats.get("edges")
     except Exception as exc:  # noqa: BLE001
+        report["daemon"] = False
         if isinstance(exc, OSError):
             report["daemon_error"] = "daemon not running"
         else:
@@ -95,16 +119,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["daemon"] else 1
 
     if report["daemon"]:
-        print(f"daemon    {url}  ok (schema {report.get('schema')})")
-        print(f"db        {report.get('db')}  {report.get('events')} events / {report.get('edges')} edges")
+        print(f"daemon    {url}  ok ({report.get('service') or 'eventmem'} api {report.get('api')}"
+              f", schema {report.get('schema')})")
+        print(f"db        {report.get('db')}  {report.get('events')} events / {report.get('edges')} edges"
+              + (f"  id {report.get('db_id')}" if report.get("db_id") else ""))
         backends = report.get("backends") or []
         print("backends  " + (", ".join(backends) if backends else "none - relation edges need one (console -> Backends)"))
+        print("auth      " + ("token required (this check sent one)" if report.get("auth") == "token" else "none (loopback trust)"))
     else:
         print(f"daemon    {url}  DOWN ({report.get('daemon_error', 'no answer')})")
         if report.get("schema") is not None:
             print(f"db        {report.get('db')}  {report.get('events')} events / {report.get('edges')} edges (opened directly)")
         elif report.get("db_error"):
             print(f"db        {report.get('db')}  {report['db_error']}")
+        if report.get("auth") == "token":
+            print("token     the daemon requires a token; pass --token-file")
 
     enc = report["encoder"]
     if enc["available"]:

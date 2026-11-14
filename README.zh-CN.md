@@ -76,7 +76,7 @@ plugins:
 
 ```
 请按实际安装位置和 `HERMES_HOME` 调整 Python 与数据库路径；在另一个终端运行 `curl http://127.0.0.1:9123/api/health` 检查服务。需要 Hermes 图谱/控制台时，在 `plugins.enabled` 中启用 `eventmem-graph` 和 `eventmem-gui` **两个**插件；`install.sh` 会打印更多步骤。需要退出登录后继续运行时，请使用服务管理器启动 daemon。可选的判定模型和 embedding 配置见[后端和](docs/backends.md "docs/backends.md")[设置。](docs/settings.md "docs/settings.md")  
-要与另一台机器上的 DSH 共享，请在 Hermes 所在机器启动使用 **Hermes 同一数据库**的 daemon，并按 DSH 指南通过 profile patch 将 `tunnelHost` 设为指向该机器、可免交互登录的 SSH 别名。如果 Windows 安装器已经在 9123 启动本地 daemon，DSH 默认会直接连接它，而不会建立隧道。此时可先仔细检查匹配的进程和自启项，再在仓库目录运行 `.\install.cmd -Uninstall`。该命令会强制终止命令行同时包含 `run.py`、`daemon` 和配置数据库路径的 Python 进程，可能影响其他同库服务；还会删除固定名 `eventmem-daemon` 的计划任务和启动快捷方式，但保留数据库。也可以选择未占用的本地端口，同时设置 `baseUrl`（如 `http://127.0.0.1:9124`）和 `tunnelLocalPort`（`9124`），`tunnelRemotePort` 保持为远端 daemon 的端口。隧道设置详见 [DSH 指南。不要把 SQLite/WAL 放到网络共享目录。](adapters/dsh/README.md "adapters/dsh/README.md")
+要与另一台机器上的 DSH 共享，请在 Hermes 所在机器启动使用 **Hermes 同一数据库**的 daemon。在 DSH 中打开 **记忆后台 → 连接**，选择 **远程记忆** 并填入可免交互登录的 SSH 别名（也可按适配器指南配置 `mode: remote` 与 `tunnelHost`）。DSH 默认是本地模式，不会主动建立隧道。如果 Windows 安装器已经在 9123 启动本地 daemon，本地模式会直接连接它；适配器会校验服务标识、API 版本和（配置了的话）数据库 ID，占用端口的其他服务会被拒绝。此时可先仔细检查匹配的进程和自启项，再在仓库目录运行 `.\install.cmd -Uninstall`。该命令会强制终止命令行同时包含 `run.py`、`daemon` 和配置数据库路径的 Python 进程，可能影响其他同库服务；还会删除固定名 `eventmem-daemon` 的计划任务和启动快捷方式，但保留数据库。也可以选择未占用的本地端口，同时设置 `baseUrl`（如 `http://127.0.0.1:9124`）和 `tunnelLocalPort`（`9124`），`tunnelRemotePort` 保持为远端 daemon 的端口。连接设置详见 [DSH 指南。不要把 SQLite/WAL 放到网络共享目录。](adapters/dsh/README.md "adapters/dsh/README.md")
 \*\*试一次交接：\*\*让 DSH 把一条容易辨认的结果记入某个项目，再让新的 Hermes 会话召回它，并用 `expand` 查看返回事件的来源和项目；反过来也可以试。这里是建议的验证步骤，不代表已经在你的环境中录制或实测；召回效果取决于实际写入和查询。  
 **工作流程**  
 1. **记录**：Agent 写入事件，或由适配器在回合末调用宿主辅助模型抽取事件。命令、日志等较长内容可以存为 artifact。  
@@ -92,7 +92,7 @@ plugins:
 
 ```
 Hermes 适配器在本机调用 core；DSH 适配器通过 HTTP 数据面连接 daemon。适配器负责对接宿主和调用宿主模型进行抽取，core 本身不是通用的事件抽取模型。新写入的数据带有 Agent/会话标记。其他宿主需要单独开发适配器或 API 集成，并非自动支持。  
-**每个数据库只运行一个 daemon。** API 和管理台没有内置鉴权，默认只监听本机回环地址；不要暴露到不可信网络。daemon 也允许更改监听地址，请保持其私有。详见[架构与](docs/architecture.md "docs/architecture.md")[数据面 API。](docs/api.md "docs/api.md")  
+**每个数据库只运行一个 daemon。** API 和管理台默认只监听本机回环地址，并可要求 bearer token（`--token` 或 `--token-file`）；设置 token 后，除最小化的 health 探测外所有路由都需要它，非回环绑定且没有 token 时 daemon 拒绝启动。没有 token 时，任何能访问该端口的本地进程都被信任；共享机器上应启用 token，不要暴露到不可信网络。详见[架构与](docs/architecture.md "docs/architecture.md")[数据面 API。](docs/api.md "docs/api.md")  
 **文档**  
 - [架构与数据流 ·](docs/architecture.md "docs/architecture.md") [关系与连边](docs/relations.md "docs/relations.md")  
 - [决策后端与模型安装 ·](docs/backends.md "docs/backends.md") [设置 ·](docs/settings.md "docs/settings.md") [API](docs/api.md "docs/api.md")  
@@ -106,5 +106,5 @@ Hermes 适配器在本机调用 core；DSH 适配器通过 HTTP 数据面连接 
 **为什么做它**  
 这套东西最初是给我自己的 Agent 写的，机器是一台没有显卡的小主机。切块记忆经常递来一整段话，其中一些事实早已被更新的内容取代，库里却没有告诉我哪一些。模型只能猜，猜错时就把旧参数当成当前值。我想把「变化」本身写成数据：一条可以追溯、也可以纠错的关系，而不是每次召回时重新猜。  
 **开发与许可**  
-CI 使用 Python 3.11 和 3.12 运行 `tests/test_*.py` 下的脚本；依赖及当前命令见 [CI 配置。测试数量和模型速度随版本及环境变化。](.github/workflows/tests.yml ".github/workflows/tests.yml")  
+CI 使用 Python 3.11 和 3.12 运行 `tests/test_*.py`，并在 Ubuntu/Windows 上运行 DSH 适配器的 Node 契约与宿主集成测试、Windows 安装契约测试；`python benchmarks/run.py` 是可复现的召回/关系标尺。依赖及当前命令见 [CI 配置。测试数量和模型速度随版本及环境变化。](.github/workflows/tests.yml ".github/workflows/tests.yml")  
 MIT，见 [LICENSE。第三方模型权重不随仓库分发，其许可另行规定。](LICENSE "LICENSE")  

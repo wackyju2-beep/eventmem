@@ -18,10 +18,35 @@ SQLite/WAL 不能放网络盘，文件锁在网络文件系统上不可靠，会
 
 ## 绑定与鉴权
 
-- daemon 默认绑定 `127.0.0.1`，但监听地址可配置；它**没有 token、没有 TLS**。跨机访问建议走 SSH 隧道：
-  `ssh -N -L 9123:127.0.0.1:9123 mint`，远端把 `http://127.0.0.1:9123` 当本地用。
+- daemon 默认绑定 `127.0.0.1`。它可以要求 bearer token：`--token`、`--token-file` 或环境变量
+  `EVENTMEM_DAEMON_TOKEN` / `EVENTMEM_DAEMON_TOKEN_FILE`。设置后，除 `GET /api/health` 外的所有
+  `/api/*` 路由都需要 `Authorization: Bearer <token>`；未授权的 health 只返回身份字段，不含
+  `db`、`pid` 或后端名。
+- **非回环地址且没有 token 时 daemon 拒绝启动**。这比打印一条容易被忽略的警告更可靠。
+- 没有 token 的回环 daemon 仍是本地信任边界：能访问该端口的本地进程都能读写数据库。共享机器上
+  请启用 token；跨机访问建议走 SSH 隧道：
+  `ssh -N -L 9123:127.0.0.1:9123 host`，远端把 `http://127.0.0.1:9123` 当本地用。
+- 所有 POST 都检查 `Origin`：浏览器从其他站点发起的跨源写请求返回 403。服务端到服务端的代理
+  （Hermes/DSH 的控制台代理）不带 `Origin`，不受影响。
 - 不要为了"方便"把 daemon 绑到 `0.0.0.0`：管理面（`/api/config`、`/api/install`、`/api/logs`）
   和数据面在同一个端口上，等于把整台机器的事件库和配置一起开放出去。真要对外，自己加反向代理 + 鉴权。
+
+## 身份：`GET /api/health`
+
+```json
+{"status": "ok", "service": "eventmem-daemon", "api": 1, "schema": 12,
+ "instance_id": "…", "db_id": "0123456789abcdef", "uptime": 42.0,
+ "auth": "none", "capabilities": {"embedding": false, "decision": true},
+ "pid": 1234, "db": "…/events.db", "packs_dir": "…", "backends": ["startlux"],
+ "paused": false}
+```
+
+- `service` + `api` 是协议身份；`db_id` 是数据库**位置**的稳定哈希（不是内容哈希）。适配器会拒绝
+  不是 `eventmem-daemon`、API 版本不是 `1`、或 `db_id` 不匹配预期值的端点——"HTTP 200 + 任意
+  JSON" 不再算可用。
+- `auth: "token"` 表示该 daemon 要求 token。未授权的 health 仍返回身份字段，但不含路径/PID。
+- `capabilities` 只做廉价探测：`embedding` 表示模型文件与运行时齐备，`decision` 表示配置了判定
+  后端或 `decision.url`。两者都是可选能力，不影响基础存储与 FTS 召回。
 
 ## 端点
 

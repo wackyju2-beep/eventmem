@@ -132,11 +132,13 @@ class running_server:
     def port(self) -> int:
         return int(self.server.server_address[1])
 
-    def request(self, path: str, *, method: str = "GET", body=None):
+    def request(self, path: str, *, method: str = "GET", body=None, headers=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
-        headers = {} if data is None else {"Content-Type": "application/json"}
+        all_headers = dict(headers or {})
+        if data is not None and "Content-Type" not in all_headers:
+            all_headers["Content-Type"] = "application/json"
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
-                                         data=data, method=method, headers=headers)
+                                         data=data, method=method, headers=all_headers)
         try:
             with urllib.request.urlopen(request, timeout=5) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -219,6 +221,100 @@ def test_health_and_status_endpoints():
             check("cursor" in body and "runs" in body, f"status shape: {sorted(body)}")
     finally:
         remove(db)
+
+
+@case
+def test_health_names_the_service_and_database():
+    db = fresh_db()
+    try:
+        daemon = daemon_mod.Daemon(settings_for(db))
+        with running_server(daemon) as api:
+            status, body = api.request("/api/health")
+            check_eq(status, 200, "health status")
+            check_eq(body["service"], daemon_mod.SERVICE_ID, "service id")
+            check_eq(body["api"], daemon_mod.API_VERSION, "data-plane protocol")
+            check_eq(body["db_id"], daemon_mod.db_identity(db), "stable database id")
+            check_eq(body["auth"], "none", "no token configured")
+    finally:
+        remove(db)
+
+
+@case
+def test_token_protects_every_api_route_but_health():
+    db = fresh_db()
+    try:
+        daemon = daemon_mod.Daemon(settings_for(db), api_token="s3cret")
+        with running_server(daemon) as api:
+            auth = {"Authorization": "Bearer s3cret"}
+            status, body = api.request("/api/health")
+            check_eq(status, 200, "health stays public")
+            check_eq(body["service"], daemon_mod.SERVICE_ID, "identity still exposed")
+            check_eq(body["auth"], "token", "health says a token is required")
+            check("db" not in body and "pid" not in body,
+                  f"unauthenticated health must not leak paths/pids: {sorted(body)}")
+
+            for path in ("/api/status", "/api/stats", "/api/config", "/api/logs",
+                         "/api/mem/projects"):
+                check_eq(api.request(path)[0], 401, f"{path} without token")
+            check_eq(api.request("/api/status", headers={"Authorization": "Bearer wrong"})[0],
+                     401, "wrong token")
+            check_eq(api.request("/api/status", headers=auth)[0], 200, "right token")
+            status, body = api.request("/api/health", headers=auth)
+            check_eq(body["db"], db, "authorized health carries the db path")
+    finally:
+        remove(db)
+
+
+@case
+def test_cross_origin_post_is_rejected():
+    """A malicious page must not drive a loopback daemon through a form POST."""
+    db = fresh_db()
+    try:
+        daemon = daemon_mod.Daemon(settings_for(db))
+        with running_server(daemon) as api:
+            status, body = api.request("/api/pause", method="POST", body={},
+                                       headers={"Origin": "https://evil.example"})
+            check_eq(status, 403, "cross-origin write")
+            check("cross-origin" in body["error"], body)
+            status, _ = api.request("/api/pause", method="POST", body={},
+                                    headers={"Origin": f"http://127.0.0.1:{api.port}"})
+            check_eq(status, 200, "same-origin write")
+            check_eq(api.request("/api/pause", method="POST", body={})[0], 200,
+                     "non-browser client without Origin")
+    finally:
+        remove(db)
+
+
+@case
+def test_non_loopback_bind_requires_a_token():
+    db = fresh_db()
+    try:
+        try:
+            daemon_mod.main(["--db", db, "--host", "0.0.0.0"])
+        except SystemExit as exc:
+            check_eq(exc.code, 2, "argparse rejects an exposed daemon without a token")
+        else:
+            raise AssertionError("a non-loopback bind without a token must not start")
+        check(daemon_mod.is_loopback_host("127.0.0.1"), "IPv4 loopback")
+        check(daemon_mod.is_loopback_host("::1"), "IPv6 loopback")
+        check(daemon_mod.is_loopback_host("localhost"), "localhost")
+        check(not daemon_mod.is_loopback_host("0.0.0.0"), "all interfaces")
+        check(not daemon_mod.is_loopback_host("10.0.0.5"), "LAN address")
+    finally:
+        remove(db)
+
+
+@case
+def test_token_file_reader_strips_bom_and_newline():
+    import tempfile
+
+    fd, path = tempfile.mkstemp(prefix="eventmem-token-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\ufefffile-secret\r\n")
+        check_eq(daemon_mod.read_token_file(path), "file-secret", "token file")
+    finally:
+        remove(path)
 
 
 @case

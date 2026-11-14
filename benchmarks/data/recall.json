@@ -1,0 +1,29 @@
+{
+  "name": "recall-v1",
+  "description": "Small frozen recall fixture: project decisions and corrections.",
+  "events": [
+    {"kind": "决定", "text": "训练数据盘选 2TB NVMe，预算 900 元以内", "project": null},
+    {"kind": "结果", "text": "训练数据盘最终买了 2TB NVMe，花了 860 元", "project": null},
+    {"kind": "变更", "text": "训练数据盘从 1TB 改成 2TB，因为数据集变大", "project": null},
+    {"kind": "教训", "text": "买 NVMe 之前先确认主板有没有第二个 M.2 插槽", "project": null},
+    {"kind": "决定", "text": "备份盘用机械硬盘，容量 4TB", "project": null},
+    {"kind": "结果", "text": "备份盘 4TB 机械硬盘已装好，SMART 正常", "project": null},
+    {"kind": "尝试", "text": "试过把 SQLite 放在网络盘上，出现锁超时", "project": null},
+    {"kind": "教训", "text": "SQLite 不能放网络共享，WAL 会坏", "project": null},
+    {"kind": "决定", "text": "小主机内存加到 32GB", "project": null},
+    {"kind": "结果", "text": "小主机内存 32GB 已经装上，占用稳定", "project": null},
+    {"kind": "决定", "text": "关系判定先用本地 4B 模型", "project": null},
+    {"kind": "变更", "text": "关系判定从本地 4B 模型换成远端 LM Studio", "project": null},
+    {"kind": "教训", "text": "LM Studio 的 decision 模型类型必须是 decision，不能是 llm", "project": null},
+    {"kind": "决定", "text": "DSH 插件默认只连本机 daemon", "project": null},
+    {"kind": "变更", "text": "DSH 插件默认从 tunnel true 改成 local，不再连 mint", "project": null},
+    {"kind": "教训", "text": "插件安装不等于 daemon 安装，首次启动要显示依赖状态", "project": null}
+  ],
+  "queries": [
+    {"query": "训练数据盘 最后买了多大", "relevant": [1, 2, 3]},
+    {"query": "SQLite 放网络盘 可以吗", "relevant": [7, 8]},
+    {"query": "关系判定模型 换成什么", "relevant": [11, 12, 13]},
+    {"query": "DSH 插件默认连接方式", "relevant": [14, 15]},
+    {"query": "小主机内存 多少", "relevant": [9, 10]}
+  ]
+}

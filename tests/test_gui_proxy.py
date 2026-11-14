@@ -82,6 +82,7 @@ class _Echo(BaseHTTPRequestHandler):
             "query": parts.query,
             "body": body.decode("utf-8", "replace"),
             "ctype": self.headers.get("Content-Type", ""),
+            "auth": self.headers.get("Authorization", ""),
         }).encode("utf-8")
         status = 404 if parts.path.endswith("/missing") else 200
         self.send_response(status)
@@ -134,7 +135,27 @@ def test_forward_carries_method_path_query_and_body():
 
 
 @case
-def test_forward_passes_errors_through_as_answers():
+def test_forward_carries_the_bearer_token():
+    """A token-protected daemon needs the page's token (or the proxy's env token)."""
+    old = os.environ.get("EVENTMEM_DAEMON_TOKEN")
+    try:
+        os.environ.pop("EVENTMEM_DAEMON_TOKEN", None)
+        with upstream() as base:
+            _, _, raw = proxy.forward("GET", "api/health", base=base,
+                                      authorization="Bearer page-token")
+            check_eq(json.loads(raw)["auth"], "Bearer page-token", "browser token forwarded")
+        os.environ["EVENTMEM_DAEMON_TOKEN"] = "env-token"
+        with upstream() as base:
+            _, _, raw = proxy.forward("GET", "api/health", base=base)
+            check_eq(json.loads(raw)["auth"], "Bearer env-token", "env token used when the page has none")
+    finally:
+        if old is None:
+            os.environ.pop("EVENTMEM_DAEMON_TOKEN", None)
+        else:
+            os.environ["EVENTMEM_DAEMON_TOKEN"] = old
+
+
+
     with upstream() as base:
         status, ctype, raw = proxy.forward("GET", "api/missing", base=base)
         check_eq(status, 404, "a 404 from the daemon is a 404 from the proxy")

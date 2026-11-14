@@ -20,16 +20,32 @@ function toast(msg, kind = "") {
   toastTimer = setTimeout(() => { el.className = "toast"; }, kind === "err" ? 8000 : 3500);
 }
 
-async function api(path, body) {
+function authToken() {
+  try { return sessionStorage.getItem("eventmem.token") || ""; } catch { return ""; }
+}
+
+async function api(path, body, retried = false) {
   // Relative on purpose: the page is served at "/" by the daemon and at
   // "/api/plugins/eventmem-gui/" when the dashboard proxies it, and a relative fetch is the
   // only spelling that works for both without a build-time base URL.
   const url = String(path).replace(/^\//, "");
-  const opts = { headers: { "Content-Type": "application/json" } };
+  const headers = { "Content-Type": "application/json" };
+  const token = authToken();
+  if (token) headers.Authorization = "Bearer " + token;
+  const opts = { headers };
   if (body !== undefined) { opts.method = "POST"; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
   let data = {};
   try { data = await res.json(); } catch { data = { error: res.statusText }; }
+  if (res.status === 401 && !retried) {
+    // The daemon is optionally token-protected. Ask once, keep the token for this tab,
+    // and retry. It is never written to the page or to configuration.
+    const entered = window.prompt("eventmem daemon token（保存在本标签页）");
+    if (entered && entered.trim()) {
+      try { sessionStorage.setItem("eventmem.token", entered.trim()); } catch { /* private mode */ }
+      return api(path, body, true);
+    }
+  }
   if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
   return data;
 }

@@ -42,6 +42,45 @@ window.__ModuleLoader__.load({
       '服务已重启': 'Service restarted',
       '暂未确认服务重启，请检查服务状态。': 'Restart not yet confirmed. Check the service status.',
       '重启请求未完成，请检查服务状态。': 'Restart request did not complete. Check the service status.',
+      '连接': 'Connection',
+      '开始使用 eventmem': 'Set up eventmem',
+      '适配器已加载，但本地记忆服务还没有连上。先确认 daemon 在运行，或在这里填写连接方式。': 'The adapter is loaded but the memory service is not reachable. Start the daemon, or configure the connection here.',
+      '适配器已加载': 'Adapter loaded',
+      '记忆服务': 'Memory service',
+      '数据库身份': 'Database identity',
+      '数据库': 'Database',
+      'API token': 'API token',
+      '向量检索': 'Vector retrieval',
+      '关系后端': 'Relation backend',
+      '远程模式': 'Remote mode',
+      '本机模式': 'Local mode',
+      '连接设置': 'Connection settings',
+      '本机记忆': 'Local memory',
+      '远程记忆': 'Remote memory',
+      '使用本机 127.0.0.1 上的 daemon（推荐）。': 'Use the daemon on this machine at 127.0.0.1 (recommended).',
+      '通过 SSH 隧道连接另一台机器上的 daemon。': 'Reach the daemon on another machine through an SSH tunnel.',
+      'daemon 地址': 'daemon address',
+      'SSH 主机别名': 'SSH host alias',
+      '预期数据库 ID（可选）': 'Expected database id (optional)',
+      'token 文件（可选）': 'token file (optional)',
+      '测试连接': 'Test connection',
+      '保存并重新加载': 'Save and reload',
+      '重新检查': 'Check again',
+      '正在测试…': 'Testing…',
+      '正在保存…': 'Saving…',
+      '已保存。适配器正在重新加载，稍后会重新连接。': 'Saved. The adapter is reloading and will reconnect shortly.',
+      '连接可用。保存后插件会按这份配置重载。': 'Connection works. Saving reloads the adapter with this configuration.',
+      '没有 daemon 时，记忆功能会静默降级：召回不注入，回合结束不写事件。': 'Without a daemon, memory degrades silently: no recall injection and no turn-end writes.',
+      '安装 daemon：': 'Install the daemon:',
+      '安全：daemon 默认只监听 loopback。若开启 token，本页通过 token 文件读取，不会把 token 写进配置。': 'Security: the daemon listens on loopback by default. If a token is enabled, this page reads it from the token file and never writes the token into configuration.',
+      '可选：向量检索需要 ONNX 模型；关系连边需要一个 decision 后端。': 'Optional: vector retrieval needs the ONNX model; edge building needs a decision backend.',
+      '细节': 'Detail',
+      '状态': 'Status',
+      '未配置': 'not configured',
+      '已配置': 'configured',
+      '不可用': 'unavailable',
+      '可选': 'optional',
+      '说明': 'Notes',
       '暂停全部判断': 'Pause all judging',
       '继续判断': 'Resume judging',
       '已暂停：这一轮停下后不再自动开新的一轮': 'Paused: the current pass stops and no new pass starts',
@@ -752,6 +791,22 @@ window.__ModuleLoader__.load({
 .emc-g-msg{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:420px}
 .emc-g-msg .t{font-size:14px;font-weight:500}
 .emc-g-msg .b{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);word-break:break-word}
+.emc-btn.on{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.emc-setup{display:flex;flex-direction:column;gap:12px;max-width:760px}
+.emc-setup-checks{display:flex;flex-direction:column;gap:1px;border:.5px solid var(--dsw-alias-border-l2);
+  border-radius:var(--dsw-radius-sm);overflow:hidden;background:var(--dsw-alias-border-l2)}
+.emc-setup-check{display:grid;grid-template-columns:8px 116px 1fr;align-items:start;gap:8px;
+  padding:7px 9px;background:var(--dsw-alias-bg-layer-2);font-size:11.5px;line-height:17px}
+.emc-setup-check .dot{width:7px;height:7px;border-radius:50%;margin-top:5px;background:var(--dsw-alias-label-tertiary)}
+.emc-setup-check.ok .dot{background:var(--dsw-alias-state-success-primary,var(--dsw-alias-state-business-primary))}
+.emc-setup-check.warn .dot{background:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-tertiary))}
+.emc-setup-check.bad .dot{background:var(--dsw-alias-state-error-primary)}
+.emc-setup-check .label{font-weight:500}
+.emc-setup-check .detail{color:var(--dsw-alias-label-secondary);word-break:break-word}
+.emc-setup-form{display:flex;flex-direction:column;gap:10px}
+.emc-setup-seg{display:flex;gap:6px;flex-wrap:wrap}
+.emc-setup-code{font-family:var(--dsw-font-mono,var(--ds-font-family-code,ui-monospace,monospace));
+  font-size:11.5px;line-height:17px;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary)}
 `
 
     // ------------------------------------------------------------- widgets
@@ -1104,6 +1159,104 @@ window.__ModuleLoader__.load({
             t('清空会删掉全部边和「判过的对」并把游标归零：下一轮 pass 从最早的事件重新判。')),
           h('div', { className: 'emc-row' }, h(Btn, { kind: 'danger', onClick: clearEdges }, t('清空连边并重跑')))),
         confirmDialog)
+    }
+
+    // --------------------------------------------------------------- setup
+
+    /**
+     * The first-run page: what works, what is optional, and the two fields that actually
+     * differ between a single-machine install and a remote one. It writes through the
+     * adapter's `setup/save` route, which uses the profile config editor — no YAML editing.
+     */
+    function Setup({ t, setup, testResult, busy, message, onTest, onSave, onRefresh }) {
+      const config = (setup && setup.config) || {}
+      const [draft, setDraft] = useState({
+        mode: config.mode || 'local',
+        baseUrl: config.baseUrl || 'http://127.0.0.1:9123',
+        tunnelHost: config.tunnelHost || '',
+        expectDbId: config.expectDbId || '',
+        tokenFile: config.tokenFile || '',
+      })
+      const synced = useRef('')
+
+      useEffect(() => {
+        if (!setup || !setup.config) return
+        // Do not overwrite what the user is typing on every health poll; only resync when
+        // the saved endpoint changes (a save, or a profile edit made elsewhere).
+        const key = [setup.config.mode, setup.config.baseUrl, setup.config.tunnelHost,
+          setup.config.expectDbId, setup.config.tokenFile].join('|')
+        if (synced.current === key) return
+        synced.current = key
+        setDraft({
+          mode: setup.config.mode || 'local',
+          baseUrl: setup.config.baseUrl || 'http://127.0.0.1:9123',
+          tunnelHost: setup.config.tunnelHost || '',
+          expectDbId: setup.config.expectDbId || '',
+          tokenFile: setup.config.tokenFile || '',
+        })
+      }, [setup])
+
+      const checks = (testResult && testResult.checks && testResult.checks.length)
+        ? testResult.checks
+        : ((setup && setup.checks) || [])
+      const change = (key) => (event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))
+      const remote = draft.mode === 'remote'
+
+      return h('div', { className: 'emc-setup' },
+        h(Card, { title: t('开始使用 eventmem'),
+          actions: h(Btn, { kind: 'sm', onClick: onRefresh, disabled: busy !== '' }, t('重新检查')) },
+        h('p', { className: 'emc-hint', style: { marginTop: 0 } },
+          t('适配器已加载，但本地记忆服务还没有连上。先确认 daemon 在运行，或在这里填写连接方式。')),
+        h('div', { className: 'emc-setup-checks' }, checks.map((item) =>
+          h('div', { key: item.id, className: 'emc-setup-check ' + (item.state || 'warn') },
+            h('span', { className: 'dot' }),
+            h('span', { className: 'label' }, t(item.label)),
+            h('span', { className: 'detail' }, item.detail || '')))),
+        setup && setup.daemon
+          ? h('p', { className: 'emc-hint', style: { margin: 0 } },
+              [setup.daemon.db ? t('数据库') + ': ' + setup.daemon.db : '',
+                setup.daemon.dbId ? 'id ' + setup.daemon.dbId : '',
+                setup.daemon.schema !== undefined ? 'schema ' + setup.daemon.schema : ''].filter(Boolean).join(' · '))
+          : null,
+        setup && setup.error ? h(Notice, { text: setup.error, kind: 'err' }) : null,
+        testResult && testResult.error ? h(Notice, { text: testResult.error, kind: 'err' }) : null,
+        testResult && testResult.ok ? h(Notice, { text: t('连接可用。保存后插件会按这份配置重载。') }) : null,
+        message ? h(Notice, { text: message }) : null),
+        h('div', { className: 'emc-setup-form' },
+          h('div', { className: 'emc-setup-seg' },
+            h('button', { type: 'button', className: 'emc-btn' + (!remote ? ' on' : ''),
+              onClick: () => setDraft((prev) => ({ ...prev, mode: 'local' })) }, t('本机记忆')),
+            h('button', { type: 'button', className: 'emc-btn' + (remote ? ' on' : ''),
+              onClick: () => setDraft((prev) => ({ ...prev, mode: 'remote' })) }, t('远程记忆'))),
+          h('p', { className: 'emc-hint', style: { margin: 0 } },
+            remote ? t('通过 SSH 隧道连接另一台机器上的 daemon。') : t('使用本机 127.0.0.1 上的 daemon（推荐）。')),
+          h(Field, { label: t('daemon 地址') },
+            h('input', { className: 'emc-input', value: draft.baseUrl, onChange: change('baseUrl'),
+              spellCheck: false, placeholder: 'http://127.0.0.1:9123' })),
+          remote
+            ? h(Field, { label: t('SSH 主机别名') },
+                h('input', { className: 'emc-input', value: draft.tunnelHost, onChange: change('tunnelHost'),
+                  spellCheck: false, placeholder: 'my-server' }))
+            : null,
+          h(Field, { label: t('预期数据库 ID（可选）') },
+            h('input', { className: 'emc-input', value: draft.expectDbId, onChange: change('expectDbId'),
+              spellCheck: false, placeholder: '8–64 hex characters' })),
+          h(Field, { label: t('token 文件（可选）') },
+            h('input', { className: 'emc-input', value: draft.tokenFile, onChange: change('tokenFile'),
+              spellCheck: false, placeholder: 'C:\\Users\\me\\.hermes\\eventmem\\daemon.token' })),
+          h('div', { className: 'emc-row' },
+            h(Btn, { onClick: () => onTest(draft), disabled: busy !== '' },
+              busy === 'test' ? t('正在测试…') : t('测试连接')),
+            h(Btn, { kind: 'primary', onClick: () => onSave(draft), disabled: busy !== '' },
+              busy === 'save' ? t('正在保存…') : t('保存并重新加载')))),
+        h(Card, { title: t('安装 daemon：') },
+          h('div', { className: 'emc-setup-code' },
+            'git clone https://github.com/wackyju2-beep/eventmem.git D:\\eventmem\ncd D:\\eventmem\n.\\install.cmd'),
+          h('p', { className: 'emc-hint' },
+            t('没有 daemon 时，记忆功能会静默降级：召回不注入，回合结束不写事件。') +
+            ' ' + t('可选：向量检索需要 ONNX 模型；关系连边需要一个 decision 后端。'))),
+        h('p', { className: 'emc-hint' },
+          t('安全：daemon 默认只监听 loopback。若开启 token，本页通过 token 文件读取，不会把 token 写进配置。')))
     }
 
     // ------------------------------------------------------------- backends
@@ -4496,7 +4649,58 @@ window.__ModuleLoader__.load({
       const [restartPending, setRestartPending] = useState(false)
       const [confirmRestart, setConfirmRestart] = useState(false)
       const restartRef = useRef(null)
+      const [setup, setSetup] = useState(null)
+      const [setupBusy, setSetupBusy] = useState('')
+      const [setupMessage, setSetupMessage] = useState('')
+      const [testResult, setTestResult] = useState(null)
+      const startedOnSetup = useRef(false)
       const [toast, notify] = useToast(t)
+
+      const loadSetup = useCallback(async () => {
+        try {
+          setSetup(await api('setup'))
+        } catch (error) {
+          setSetup({ config: null, checks: [], error: error.message })
+        }
+      }, [])
+
+      useEffect(() => { loadSetup() }, [loadSetup])
+      useEffect(() => {
+        // A fresh plugin activation with no daemon should land on the explanation, not on
+        // an empty overview. Only do it once; later failures leave the operator's tab alone.
+        if (!startedOnSetup.current && offline) {
+          startedOnSetup.current = true
+          setTab('setup')
+        }
+      }, [offline])
+
+      const testSetup = async (draft) => {
+        setSetupBusy('test')
+        setTestResult(null)
+        setSetupMessage('')
+        try {
+          setTestResult(await api('setup/test', draft))
+        } catch (error) {
+          setTestResult({ ok: false, error: error.message, checks: [] })
+        } finally {
+          setSetupBusy('')
+        }
+      }
+
+      const saveSetupDraft = async (draft) => {
+        setSetupBusy('save')
+        setTestResult(null)
+        setSetupMessage('')
+        try {
+          await api('setup/save', draft)
+          setSetupMessage(t('已保存。适配器正在重新加载，稍后会重新连接。'))
+          setTimeout(() => { loadSetup() }, 1200)
+        } catch (error) {
+          setTestResult({ ok: false, error: error.message, checks: [] })
+        } finally {
+          setSetupBusy('')
+        }
+      }
 
       useEffect(() => {
         let alive = true
@@ -4570,12 +4774,24 @@ window.__ModuleLoader__.load({
 
       const tabs = [
         ['overview', t('概览')],
+        ['setup', t('连接')],
         ['backends', t('后端')],
         ['models', t('模型')],
         ['schedule', t('调度')],
         ['logs', t('日志')],
         ['graph', t('图谱')],
       ]
+
+      const setupPage = h(Setup, {
+        t,
+        setup,
+        testResult,
+        busy: setupBusy,
+        message: setupMessage,
+        onTest: testSetup,
+        onSave: saveSetupDraft,
+        onRefresh: loadSetup,
+      })
 
       return h('div', { className: 'emc' },
         h('style', null, CSS),
@@ -4617,7 +4833,8 @@ window.__ModuleLoader__.load({
             h(LiveBar, { t, status, notify }),
             h('div', { className: 'emc-body' },
               h('div', { className: 'emc-body-in' },
-                tab === 'overview' ? h(Overview, { t, status, notify }) : null,
+                tab === 'overview' ? (health ? h(Overview, { t, status, notify }) : setupPage) : null,
+                tab === 'setup' ? setupPage : null,
                 tab === 'backends' ? h(Backends, { t, notify }) : null,
                 tab === 'models' ? h(Models, { t, notify }) : null,
                 tab === 'schedule' ? h(Schedule, { t, notify, status, setStatus }) : null,

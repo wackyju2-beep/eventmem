@@ -1,0 +1,19 @@
+{
+  "name": "relations-v1",
+  "description": "Frozen relation-label fixture for the lexical regression baseline.",
+  "pairs": [
+    {"a": "训练数据盘选 1TB NVMe", "b": "训练数据盘改成 2TB NVMe", "label": "改变"},
+    {"a": "备份用机械硬盘 4TB", "b": "备份盘换成 4TB 机械硬盘", "label": "改变"},
+    {"a": "关系判定用本地 4B 模型", "b": "关系判定改用远端 LM Studio", "label": "改变"},
+    {"a": "不要用网络盘放 SQLite", "b": "SQLite 不能放网络共享", "label": "重复"},
+    {"a": "DSH 插件默认 tunnel true", "b": "DSH 插件默认只连本机，不再开隧道", "label": "改变"},
+    {"a": "决定买 2TB NVMe", "b": "取消买 NVMe 的计划", "label": "否定"},
+    {"a": "计划用本地模型", "b": "放弃本地模型方案", "label": "否定"},
+    {"a": "训练变慢", "b": "因为数据集变大，训练变慢", "label": "因为"},
+    {"a": "关系判定切到远端", "b": "因为本地 4B 模型太慢，关系判定切到远端", "label": "因为"},
+    {"a": "内存加到 32GB", "b": "内存加到 32GB，占用稳定在 20GB", "label": "细化"},
+    {"a": "备份盘已装好", "b": "备份盘已装好，SMART 正常", "label": "细化"},
+    {"a": "训练数据盘选 2TB NVMe", "b": "今天天气不错", "label": "none"},
+    {"a": "DSH 插件默认只连本机", "b": "关系判定先用本地 4B 模型", "label": "none"}
+  ]
+}

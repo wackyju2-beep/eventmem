@@ -1,8 +1,7 @@
 {
   "name": "dsh-eventmem",
-  "version": "0.3.1",
-  "private": true,
-  "description": "eventmem adapter for DeepSeek Harness: recall injection, seven memory tools, turn-end extraction, and the native memory console (overview / backends / models / schedule / logs / graph), over the eventmem daemon's /api/mem/* data plane.",
+  "version": "0.4.0",
+  "description": "eventmem adapter for DeepSeek Harness: recall injection, seven memory tools, turn-end extraction, and the native memory console (overview / backends / models / schedule / logs / graph), over a separately installed eventmem daemon.",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
@@ -21,8 +20,36 @@
     "docs",
     "icon.svg",
     "README.md",
-    "NOTES-DSH-RUNTIME.md"
+    "NOTES-DSH-RUNTIME.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "test": "node ../../tests/test_dsh_adapter.mjs"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "eventmem",
+    "memory",
+    "sqlite",
+    "recall"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wackyju2-beep/eventmem.git",
+    "directory": "adapters/dsh"
+  },
+  "homepage": "https://github.com/wackyju2-beep/eventmem/tree/main/adapters/dsh",
+  "bugs": {
+    "url": "https://github.com/wackyju2-beep/eventmem/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

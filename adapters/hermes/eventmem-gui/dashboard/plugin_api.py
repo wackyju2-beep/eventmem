@@ -34,9 +34,21 @@ DEFAULT_DAEMON = "http://127.0.0.1:9123"
 #: The path the host mounts this plugin's API under; the desktop page hardcodes the same.
 PREFIX = "/api/plugins/eventmem-gui"
 
-#: The daemon binds loopback and has no auth, so the proxy must not be a way to reach it
-#: from the internet by accident: the dashboard's own auth is the gate in front of this.
+#: The daemon may require a bearer token (``--token-file``). The proxy forwards the token
+#: the browser supplied, or reads the daemon's own token file/env when the page did not.
 TIMEOUT = 15.0
+
+
+def daemon_token() -> str:
+    """The daemon's token from ``EVENTMEM_DAEMON_TOKEN_FILE`` or ``EVENTMEM_DAEMON_TOKEN``."""
+    path = os.environ.get("EVENTMEM_DAEMON_TOKEN_FILE", "").strip()
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8-sig") as handle:
+                return handle.read().strip()
+        except OSError:
+            return ""
+    return os.environ.get("EVENTMEM_DAEMON_TOKEN", "").strip()
 
 
 def daemon_url() -> str:
@@ -46,7 +58,7 @@ def daemon_url() -> str:
 
 def forward(method: str, path: str, *, query: str = "", body: Optional[bytes] = None,
             content_type: str = "", timeout: float = TIMEOUT,
-            base: str = "") -> tuple[int, str, bytes]:
+            base: str = "", authorization: str = "") -> tuple[int, str, bytes]:
     """One request to the daemon: ``(status, content_type, body)``.
 
     Deliberately free of FastAPI so the proxy can be tested against a plain HTTP server,
@@ -56,6 +68,12 @@ def forward(method: str, path: str, *, query: str = "", body: Optional[bytes] = 
     if query:
         url += "?" + query.lstrip("?")
     headers = {"User-Agent": "eventmem-dashboard-proxy/1"}
+    token = authorization.strip()
+    if not token:
+        env_token = daemon_token()
+        token = f"Bearer {env_token}" if env_token else ""
+    if token:
+        headers["Authorization"] = token
     if body is not None and content_type:
         headers["Content-Type"] = content_type
     request = urllib.request.Request(url, data=body or None, method=method, headers=headers)
@@ -95,6 +113,7 @@ try:  # the dashboard process has fastapi; tests and a bare CLI import do not ne
             query=request.url.query,
             body=body,
             content_type=request.headers.get("content-type", ""),
+            authorization=request.headers.get("authorization", ""),
         )
         return Response(content=data, status_code=status, media_type=ctype or None)
 
