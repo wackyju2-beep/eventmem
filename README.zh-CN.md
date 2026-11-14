@@ -1,4 +1,7 @@
-**eventmem**  
+# eventmem
+
+[![tests](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml/badge.svg)](https://github.com/wackyju2-beep/eventmem/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [English] · **中文**(README.md "README.md")  
 
