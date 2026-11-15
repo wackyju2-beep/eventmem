@@ -58,21 +58,22 @@ def db_path(home: Optional[str | Path] = None) -> str:
 
 
 def _yaml():
-    """PyYAML, pulling in the host runtime's site-packages first when needed.
+    """The YAML library to read and write settings with.
 
-    The worker runs under Hermes' launcher interpreter, which ships stdlib only;
-    ``hermes_bootstrap`` is what injects the environment that has ``yaml``.  Importing it
-    is a no-op inside a normal host process.
+    Inside Hermes that is the host's own ``hermes_yaml`` (ruamel, YAML 1.1): it is public
+    plugin API and always present, so the plugin must not require PyYAML on top of it.
+    A standalone worker, the nightly CLI or a test process has no host on ``sys.path``;
+    there plain ``yaml`` is used when installed.  ``None`` means neither is available, and
+    the caller falls back to the host's config reader or to the defaults.
     """
     try:
-        import yaml
+        import hermes_yaml as yaml  # noqa: PLC0415 - host module, imported lazily
 
         return yaml
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - no host around
         pass
     try:
-        import hermes_bootstrap  # noqa: F401  (injects the host's site-packages)
-        import yaml
+        import yaml  # noqa: PLC0415
 
         return yaml
     except Exception:  # noqa: BLE001 - a truly bare interpreter

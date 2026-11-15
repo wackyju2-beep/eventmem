@@ -14,6 +14,7 @@ import os
 import sys
 import tempfile
 import traceback
+import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -240,6 +241,44 @@ def test_eventmem_lang_beats_the_host_provider() -> None:
                 os.environ["EVENTMEM_LANG"] = prev
     finally:
         i18n.set_language_provider(None)
+        _rm(home)
+
+
+# --------------------------------------------------------------------------- yaml source
+
+@case
+def test_yaml_helper_prefers_the_host_module() -> None:
+    """Inside Hermes the host's ``hermes_yaml`` is the reader; PyYAML is not required."""
+    fake = types.ModuleType("hermes_yaml")
+    sys.modules["hermes_yaml"] = fake
+    try:
+        check(S._yaml() is fake, "the host module wins over an installed PyYAML")
+    finally:
+        sys.modules.pop("hermes_yaml", None)
+    fallback = S._yaml()
+    check(fallback is None or getattr(fallback, "__name__", "") == "yaml",
+          "outside a host: plain yaml when installed, otherwise nothing")
+
+
+@case
+def test_settings_are_read_through_the_host_yaml_module() -> None:
+    fake = types.ModuleType("hermes_yaml")
+    seen: list[str] = []
+
+    def safe_load(text):
+        seen.append(text)
+        return {"plugins": {"entries": {"eventmem": {"settings": {"edges": {"margin": 0.4}}}}}}
+
+    fake.safe_load = safe_load
+    sys.modules["hermes_yaml"] = fake
+    home = home_with("plugins:\n  entries:\n    eventmem:\n      settings:\n"
+                     "        edges:\n          margin: 0.4\n")
+    try:
+        got = S.build(home)
+        check_eq(got.edges.margin, 0.4, "config.yaml is parsed by hermes_yaml")
+        check(bool(seen), "hermes_yaml.safe_load was actually used")
+    finally:
+        sys.modules.pop("hermes_yaml", None)
         _rm(home)
 
 
