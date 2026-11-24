@@ -60,11 +60,8 @@ def _config_language() -> str:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return ""
-    try:  # the host ships ``hermes_yaml``; a bare interpreter may ship PyYAML, or neither
-        try:
-            import hermes_yaml as yaml  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 - no host around
-            import yaml  # noqa: PLC0415
+    try:  # the host ships PyYAML; a bare interpreter may not
+        import yaml  # noqa: PLC0415
 
         data = yaml.safe_load(text) or {}
         if isinstance(data, dict):

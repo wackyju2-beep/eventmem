@@ -1,5 +1,5 @@
 name: eventmem-gui
-version: 0.3.0
+version: 0.5.0
 description: >-
   eventmem daemon 的管理台（默认 127.0.0.1:9123）原样代理到
   /api/plugins/eventmem-gui/。桌面端经 SSH 连远端 backend 时，浏览器打不开对端

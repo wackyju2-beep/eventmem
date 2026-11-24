@@ -97,6 +97,7 @@ from .packs import Pack, PackError
 from .schema import SCHEMA_VERSION
 from .settings import CoreSettings, describe
 from .store import Store, KINDS, RELS, _KEEP
+from .wakeup import Listener as WakeupListener
 
 _log = logging.getLogger(__name__)
 
@@ -208,6 +209,12 @@ class Daemon:
         #: Set by ``POST /api/switch`` to cut the poll short: the next pass probes the chain
         #: again, so a backend that came up mid-round gets picked immediately.
         self._wake = threading.Event()
+        #: New event notification. Immediate mode uses this as its normal trigger;
+        #: interval/calendar modes retain their timer semantics.
+        self._event_wake = threading.Event()
+        #: A backend switch queues a follow-up pass without interrupting the current one.
+        self._forced_run = threading.Event()
+        self._wakeup_listener: Optional[WakeupListener] = None
         #: What the current pass is doing right now — the console's live counter.
         self._live: Optional[dict[str, Any]] = None
         #: Backends that answered the probe but failed every decision, and when.  A pass
@@ -357,13 +364,16 @@ class Daemon:
     def loop(self, poll: Optional[float] = None) -> None:
         """Run passes on the configured schedule until the daemon stops.
 
-        ``edges.schedule`` picks the trigger — ``interval`` (every ``poll_seconds``),
+        ``edges.schedule`` picks the trigger — ``immediate`` (event wakeup), ``interval`` (every ``poll_seconds``),
         ``daily`` / ``weekly`` (once at ``schedule_at``) or ``off`` (button only) — and the
         pause flag vetoes all of them.  Re-read every round so the GUI can change it live.
         """
+        # Process an existing cursor gap once on daemon startup in immediate mode.
+        self._event_wake.set()
         while not self._stop.is_set():
-            self._wake.clear()
             if self._due(poll):
+                self._event_wake.clear()
+                self._forced_run.clear()
                 try:
                     result = self.run_pass()
                     if result.get("skipped") not in ("idle", "busy"):
@@ -380,7 +390,7 @@ class Daemon:
 
     def _schedule_mode(self) -> str:
         mode = str(getattr(self.settings.edges, "schedule", "interval") or "interval")
-        return mode if mode in ("interval", "daily", "weekly", "off") else "interval"
+        return mode if mode in ("immediate", "interval", "daily", "weekly", "off") else "interval"
 
     def _today_target(self) -> Optional[float]:
         """Today's ``schedule_at`` as a timestamp; ``None`` on a day the weekly rule skips."""
@@ -403,9 +413,13 @@ class Daemon:
         """True when a pass should start now."""
         if self._paused:
             return False
+        if self._forced_run.is_set():
+            return True
         mode = self._schedule_mode()
         if mode == "off":
             return False
+        if mode == "immediate":
+            return self._event_wake.is_set()
         if mode == "interval":
             interval = float(poll) if poll and poll > 0 else float(self.settings.edges.poll_seconds)
             return (time.time() - self._last_pass_end) >= max(1.0, interval)
@@ -415,6 +429,8 @@ class Daemon:
 
     def _check_every(self, poll: Optional[float] = None) -> float:
         """How long the loop may sleep before it looks at the clock again."""
+        if self._schedule_mode() in ("immediate", "off"):
+            return 3600.0
         if self._schedule_mode() != "interval":
             return 30.0
         interval = float(poll) if poll and poll > 0 else float(self.settings.edges.poll_seconds)
@@ -448,6 +464,10 @@ class Daemon:
         _log.info("eventmem daemon: %s", "paused" if self._paused else "resumed")
         return self._paused
 
+    def _on_event_wakeup(self) -> None:
+        self._event_wake.set()
+        self._wake.set()
+
     def _schedule_view(self) -> dict[str, Any]:
         mode = self._schedule_mode()
         return {
@@ -457,6 +477,8 @@ class Daemon:
             "poll_seconds": float(self.settings.edges.poll_seconds),
             "paused": self._paused,
             "last_pass": self._last_pass_end or None,
+            "event_wakeup": mode == "immediate",
+            "forced_run": self._forced_run.is_set(),
         }
 
     # ------------------------------------------------------------------ views
@@ -1499,21 +1521,17 @@ class Daemon:
             paused = self.set_paused(True if want is None else bool(want))
             return 200, {"ok": True, "paused": paused, "schedule": self._schedule_view()}
         if method == "POST" and tail == ["switch"]:
-            # Stop the current pass *and* cut the poll short: the next pass probes the chain
-            # from the top, so a backend that just came up (LM Studio finished loading) wins
-            # without anyone restarting the daemon.
-            #
-            # The cooldown is cleared on purpose: pressing this button is the operator saying
-            # "I changed something" (a new model, a fixed key). Without the reset a backend
-            # marked down up to five minutes ago would still be skipped and the button would
-            # look broken.
+            # Queue a follow-up pass. The current pass keeps its backend snapshot and
+            # finishes normally; the next pass probes the new chain immediately.
+            # The cooldown reset records the operator's explicit backend change.
             running = self._pass_lock.locked()
-            self._abort.set()
             self._down.clear()
+            self._forced_run.set()
+            self._event_wake.set()
             self._wake.set()
             if self._paused:
-                self.set_paused(False)   # "switch and rerun" means the operator wants work
-            return 200, {"ok": True, "stopping": running}
+                self.set_paused(False)   # applying a switch resumes scheduled work
+            return 200, {"ok": True, "queued": True, "running": running}
         if len(tail) == 3 and tail[0] == "packs" and method == "POST":
             name, action = tail[1], tail[2]
             if action == "config":
@@ -1730,6 +1748,9 @@ class _RingHandler(logging.Handler):
 
 def serve(daemon: Daemon, *, host: str = "127.0.0.1", port: int = API_PORT,
           poll: Optional[float] = None) -> None:
+    daemon._wakeup_listener = WakeupListener(daemon.settings.db_path, daemon._on_event_wakeup)
+    if not daemon._wakeup_listener.start():
+        _log.warning("eventmem daemon: event wakeup socket unavailable; timer fallback remains active")
     server = make_server(daemon, host, port)
     thread = threading.Thread(target=server.serve_forever, name="eventmem-api", daemon=True)
     thread.start()
@@ -1744,6 +1765,8 @@ def serve(daemon: Daemon, *, host: str = "127.0.0.1", port: int = API_PORT,
         for background in (daemon._job_thread, daemon._backfill_thread):
             if background is not None:
                 background.join()
+        if daemon._wakeup_listener is not None:
+            daemon._wakeup_listener.close()
         daemon.close_mem()
 
 

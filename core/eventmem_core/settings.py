@@ -65,8 +65,8 @@ class EdgePolicy:
     #: Resident worker: seconds between polls, and the first-run look-back window
     #: used when the database has no cursor yet.
     poll_seconds: float = 60.0
-    #: When a pass may start: ``interval`` (every ``poll_seconds``), ``daily`` / ``weekly``
-    #: (once at ``schedule_at``), or ``off`` (the Run button is the only trigger).
+    #: When a pass may start: ``immediate`` (event wakeup), ``interval`` (every
+    #: ``poll_seconds``), ``daily`` / ``weekly`` (once at ``schedule_at``), or ``off``.
     schedule: str = "interval"
     #: Local wall-clock ``HH:MM`` for the daily and weekly modes.
     schedule_at: str = "03:30"
@@ -225,8 +225,8 @@ def _validate(policy: Any, name: str, warn) -> None:
         if policy.max_fail_streak < 1:
             warn(f"{name}.max_fail_streak 必须 ≥1；用默认值")
             return False
-        if policy.schedule not in ('interval', 'daily', 'weekly', 'off'):
-            warn(f"{name}.schedule 必须是 interval/daily/weekly/off；用默认值")
+        if policy.schedule not in ('immediate', 'interval', 'daily', 'weekly', 'off'):
+            warn(f"{name}.schedule 必须是 immediate/interval/daily/weekly/off；用默认值")
             return False
         if policy.schedule in ('daily', 'weekly'):
             try:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eventmem-core"
-version = "0.2.1"
+version = "0.5.0"
 description = "Event-shaped local memory: append-only events, human-named projects, nightly relation edges."
 readme = "README.md"
 requires-python = ">=3.11"

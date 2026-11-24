@@ -1275,7 +1275,7 @@ const DEFAULTS = {
 
 /* String-valued schedule fields; everything else in DEFAULTS is a number. */
 const TEXT_KEYS = ['schedule', 'schedule_at']
-const MODES = ['interval', 'daily', 'weekly', 'off']
+const MODES = ['immediate', 'interval', 'daily', 'weekly', 'off']
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 
@@ -1474,6 +1474,7 @@ function Schedule({ ctx, notify }) {
                   value: form.schedule,
                   onChange: (event) => edit('schedule', event.target.value),
                   children: [
+                    jsx('option', { value: 'immediate', children: t('新事件到达后立即执行') }, 'immediate'),
                     jsx('option', { value: 'interval', children: t('每 N 分钟检查一次（有新事件才跑）') }, 'interval'),
                     jsx('option', { value: 'daily', children: t('每天固定时间') }, 'daily'),
                     jsx('option', { value: 'weekly', children: t('每周固定一天') }, 'weekly'),
@@ -1777,7 +1778,7 @@ function LiveBar({ ctx, notify }) {
               ? fmt('上次 {0} · {1} · {2} 对 / {3} 边', last.backend || '—', when(last.ts), NI(last.pairs), NI(last.edges))
               : t('还没跑过')
           }),
-      jsx(Btn, { primary: true, onClick: () => post('/api/switch', '已请求切换：本轮停下后立刻重跑，重新探活链路'), children: t('切换并重跑') })
+      jsx(Btn, { primary: true, onClick: () => post('/api/switch', '已应用切换：当前轮结束后排队重算'), children: t('应用切换并排队重算') })
     ]
   })
 }

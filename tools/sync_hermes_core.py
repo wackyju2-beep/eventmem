@@ -18,7 +18,7 @@ DEST = ROOT / "adapters" / "hermes-catalog" / "eventmem"
 
 ADAPTER_FILES = ("__init__.py", "extract.py", "host.py", "provider.py", "settings.py", "tools.py")
 CORE_FILES = ("__init__.py", "core.py", "embed.py", "i18n.py", "jev.py", "nightly.py",
-              "providers.py", "recall.py", "schema.py", "settings.py", "store.py")
+              "providers.py", "recall.py", "schema.py", "settings.py", "store.py", "wakeup.py")
 
 
 def _adapter_content(name: str) -> bytes:

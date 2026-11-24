@@ -537,7 +537,7 @@ def test_the_examples_are_real_packs():
     missing_weights = [p for p in problems if "权重文件不存在" in p]
     check_eq([p for p in problems if p not in missing_weights], [], "the example configs parse cleanly")
     check_eq(len(missing_weights), 1, "and only lev refers to weights that are not in the repo")
-    check_eq(sorted(p.name for p in found), ["lev", "lmstudio", "local-judge", "typesafe"],
+    check_eq(sorted(p.name for p in found), ["lev", "lmstudio", "local-judge", "startlux", "typesafe"],
              "one example per shape")
     by_name = {p.name: p for p in found}
     check_eq(by_name["lev"].kind, "self", "lev: we launch it")

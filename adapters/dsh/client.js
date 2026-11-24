@@ -175,6 +175,7 @@ window.__ModuleLoader__.load({
       '调度已经在默认值上': 'The schedule already uses the defaults',
       '自动运行': 'Automatic runs',
       '每 N 分钟检查': 'Every N minutes',
+      '新事件到达后立即执行': 'Run immediately when new events arrive',
       '每天固定时间': 'Daily at',
       '每周固定一天': 'Weekly on',
       '关闭（只用按钮）': 'Off (button only)',
@@ -328,8 +329,8 @@ window.__ModuleLoader__.load({
       '暂停中': 'paused',
       '上次 {0} · {1} · {2} 对 / {3} 边': 'last {0} · {1} · {2} pairs / {3} edges',
       '还没跑过': 'no pass yet',
-      '切换并重跑': 'Switch & rerun',
-      '已请求切换：本轮停下后立刻重跑，重新探活链路': 'Switch requested: the pass stops, then the chain is probed again immediately',
+      '应用切换并排队重算': 'Apply switch and queue recalculation',
+      '已应用切换：当前轮结束后排队重算': 'Switch applied: recalculation is queued after the current pass',
       '对': 'pairs',
       // ---- 调度页 ------------------------------------------------------------
       '已暂停（不开新的一轮）': 'paused (no new round)',
@@ -968,7 +969,7 @@ window.__ModuleLoader__.load({
       const switchBackend = async () => {
         try {
           await api('switch', {})
-          notify(t('已请求切换：本轮停下后立刻重跑，重新探活链路'))
+          notify(t('已应用切换：当前轮结束后排队重算'))
         } catch (error) {
           notify(error.message, 'err')
         }
@@ -993,7 +994,7 @@ window.__ModuleLoader__.load({
               last
                 ? fill(t, '上次 {0} · {1} · {2} 对 / {3} 边', last.backend || '—', when(last.ts), num(last.pairs), num(last.edges))
                 : t('还没跑过')),
-        h(Btn, { kind: 'sm', disabled: !status, onClick: switchBackend }, t('切换并重跑')))
+        h(Btn, { kind: 'sm', disabled: !status, onClick: switchBackend }, t('应用切换并排队重算')))
     }
 
     // ------------------------------------------------------------- overview
@@ -1712,7 +1713,7 @@ window.__ModuleLoader__.load({
       schedule_weekday: 0,
     }
     const TEXT_KEYS = ['schedule', 'schedule_at']
-    const MODES = ['interval', 'daily', 'weekly', 'off']
+    const MODES = ['immediate', 'interval', 'daily', 'weekly', 'off']
     const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
     const PRESETS = {
@@ -1981,6 +1982,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'emc-grid c3' },
           h(Field, { label: t('什么时候算') },
             h('select', { className: 'emc-select', value: form.schedule, onChange: setField('schedule') },
+              h('option', { value: 'immediate' }, t('新事件到达后立即执行')),
               h('option', { value: 'interval' }, t('每 N 分钟检查一次（有新事件才跑）')),
               h('option', { value: 'daily' }, t('每天固定时间')),
               h('option', { value: 'weekly' }, t('每周固定一天')),

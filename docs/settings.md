@@ -52,7 +52,8 @@ plugins:
 | `unclosed_lessons` | `2` | Q2 候选：最多几条未闭环教训 |
 | `decision_skeleton` | `5` | Q2 候选：最新几条未被否定的决定 |
 | `max_fail_streak` | `3` | 连续几次决策调用失败就中止本轮（服务挂了别空转到天亮） |
-| `poll_seconds` | `60` | worker 轮询间隔 |
+| `schedule` | `"interval"` | `immediate`=新事件到达后唤醒并排队；`interval`=固定间隔检查；`daily`/`weekly`=按日期时间；`off`=只接受手动/强制运行 |
+| `poll_seconds` | `60` | `interval` 模式的轮询间隔；其它模式只作兜底/兼容值 |
 | `first_run_hours` | `24` | 库里没有游标时的首次回看窗口 |
 
 ## `decision` — 决策模型

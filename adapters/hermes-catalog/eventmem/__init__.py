@@ -34,7 +34,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "eventmem"
-PLUGIN_VERSION = "0.2.1"
+PLUGIN_VERSION = "0.5.0"
 
 
 def __getattr__(name: str):

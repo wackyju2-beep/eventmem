@@ -775,8 +775,9 @@ def test_stop_and_switch_are_cooperative():
             daemon._down["win-autothink"] = time.time()
             status, body = live.post("/api/switch", {})
             check_eq(status, 200, "switch answers")
-            check_eq(daemon._abort.is_set(), True, "switch also stops the pass")
-            check_eq(daemon._wake.is_set(), True, "and wakes the poll for a fresh probe")
+            check_eq(daemon._abort.is_set(), False, "switch does not interrupt the current pass")
+            check_eq(daemon._forced_run.is_set(), True, "queues a follow-up pass")
+            check_eq(daemon._wake.is_set(), True, "and wakes the scheduler")
             check_eq(daemon._down, {}, "and clears the cooldown: the operator changed something")
     finally:
         import shutil

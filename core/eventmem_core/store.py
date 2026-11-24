@@ -40,8 +40,10 @@ from typing import Any, Callable, Iterable, Optional, Sequence
 
 try:  # imported as ``eventmem.store`` (package) …
     from .schema import ensure_schema
+    from .wakeup import notify as notify_daemon
 except ImportError:  # … or as a top-level module by the test scripts / direct import
     from schema import ensure_schema  # type: ignore[no-redef]
+    from wakeup import notify as notify_daemon  # type: ignore[no-redef]
 
 KINDS = ("决定", "尝试", "结果", "变更", "教训")
 RELS = ("改变", "否定", "重复", "因为", "细化")
@@ -409,6 +411,7 @@ class Store:
                     (eid, xid),
                 )
             self._db.commit()
+            notify_daemon(self.db_path)
             return eid
 
     def get_event(self, eid: int) -> Optional[dict]:

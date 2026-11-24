@@ -77,6 +77,7 @@ EN: dict[str, str] = {
     "自动运行": "Automatic runs",
     "已暂停（不开新的一轮）": "paused (no new round)",
     "什么时候算": "When",
+    "新事件到达后立即执行": "run immediately when new events arrive",
     "每 N 分钟检查一次（有新事件才跑）": "on an interval (only when there is new work)",
     "每天固定时间": "every day at a fixed time",
     "每周固定一天": "one fixed weekday",
@@ -124,10 +125,10 @@ EN: dict[str, str] = {
     "边": "edges",
     "停止": "Stop",
     "停止中…": "Stopping…",
-    "切换并重跑": "Switch & rerun",
+    "应用切换并排队重算": "Apply switch and queue recalculation",
     "已请求停止：本轮做完手上这一对就停": "Stop requested: this pass ends after the pair in flight",
-    "已请求切换：本轮停下后立刻重跑，重新探活链路":
-        "Switch requested: the pass stops, then the chain is probed again immediately",
+    "已应用切换：当前轮结束后排队重算":
+        "Switch applied: recalculation is queued after the current pass",
     "上次 {0} · {1} · {2} 对 / {3} 边": "last {0} · {1} · {2} pairs / {3} edges",
     "还没跑过": "no pass yet",
     # ---- backends -------------------------------------------------------
